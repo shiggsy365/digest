@@ -65,7 +65,7 @@
   }
   function paginate() {
     var list = content.querySelector('[data-paginate]');
-    var size = 6, i;
+    var size = parseInt(list && list.getAttribute('data-page-size'), 10) || 6, i;
     state.pages = [];
     state.index = 0;
     state.detail = false;
@@ -122,7 +122,8 @@
       if (error) return fail(error);
       state.more = false;
       content.innerHTML = '<main><h1>All ' + esc(kind) +
-        '</h1><div class="directory-grid" data-paginate>' + data.items.map(function (item) {
+        '</h1><div class="directory-grid" data-paginate data-page-size="20">' +
+        data.items.map(function (item) {
           return '<button class="directory-tile" data-filter="' + kind + '" data-value="' +
             esc(item.name) + '"><strong>' + esc(item.name) + '</strong><span>' +
             item.count + (item.count === 1 ? ' book' : ' books') + '</span></button>';

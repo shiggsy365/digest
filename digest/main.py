@@ -3,7 +3,9 @@ import mimetypes
 import re
 import secrets
 import smtplib
+from datetime import UTC, datetime, timedelta
 from email.message import EmailMessage
+from email.utils import format_datetime
 from pathlib import Path
 from typing import Annotated
 from urllib.parse import parse_qs, urlencode, urlsplit
@@ -123,17 +125,28 @@ app.add_middleware(
 async def choose_session_lifetime(request: Request, call_next):
     """Use a browser-session cookie unless the user explicitly asks to be remembered."""
     response = await call_next(request)
-    if not request.session.get("remember_me"):
-        response.raw_headers = [
-            (
-                name,
-                re.sub(rb"; Max-Age=\d+", b"", value, flags=re.IGNORECASE)
-                if name.lower() == b"set-cookie" and value.startswith(b"session=")
-                else value,
-            )
-            for name, value in response.raw_headers
-        ]
+    response.raw_headers = [
+        (
+            name,
+            _session_cookie_lifetime(value, bool(request.session.get("remember_me")))
+            if name.lower() == b"set-cookie" and value.startswith(b"session=")
+            else value,
+        )
+        for name, value in response.raw_headers
+    ]
     return response
+
+
+def _session_cookie_lifetime(value: bytes, remember: bool) -> bytes:
+    """Make persistent sessions compatible with older e-reader browsers."""
+    if not remember:
+        return re.sub(
+            rb"; (?:Max-Age=\d+|Expires=[^;]+)", b"", value, flags=re.IGNORECASE
+        )
+    if not re.search(rb"; Expires=", value, flags=re.IGNORECASE):
+        expires = format_datetime(datetime.now(UTC) + timedelta(days=settings.session_days), usegmt=True)
+        value += b"; Expires=" + expires.encode("ascii")
+    return value
 
 
 base = Path(__file__).parent
