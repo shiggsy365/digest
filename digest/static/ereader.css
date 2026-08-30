@@ -1,7 +1,13 @@
 :root { --paper: #fff; --ink: #111; --soft: #eee; --line: #555; --muted: #444; }
 * { box-sizing: border-box; }
+html, body { height: 100%; }
 body { margin: 0; background: var(--paper); color: var(--ink); font: 18px/1.4 Georgia, serif; }
-main, footer, .main-nav { width: 94%; max-width: 48rem; margin: 0 auto; }
+#app-shell { display: table; table-layout: fixed; width: 100%; height: 100%; }
+.shell-row { display: table-row; }
+.shell-cell { display: table-cell; vertical-align: top; }
+.shell-content-cell { height: 100%; }
+.shell-content-cell main { height: 100%; overflow-y: auto; overflow-x: hidden; box-sizing: border-box; }
+main, .page-bar, .main-nav, .section-tabs { width: 94%; max-width: 48rem; margin: 0 auto; }
 .context-bar { width: 100%; background: var(--ink); color: var(--paper); border-bottom: 2px solid var(--ink); }
 .context-bar table { width: 94%; max-width: 48rem; margin: 0 auto; border-collapse: collapse; table-layout: fixed; }
 .context-bar td { height: 2.7rem; overflow: hidden; text-align: center; white-space: nowrap; }
@@ -15,7 +21,11 @@ a { color: var(--ink); }
 .main-nav a, .button, button, .sort-bar a { display: inline-block; min-height: 2.7rem; border: 2px solid var(--ink); margin: .2rem; padding: .5rem .7rem; background: var(--paper); color: var(--ink); font: inherit; font-weight: bold; text-decoration: none; }
 .main-nav a:focus, .button:focus, button:focus, .sort-bar a:focus { outline: 2px solid var(--ink); outline-offset: 1px; }
 .main-nav a.active { background: var(--ink); color: var(--paper); }
-nav form, footer form, .book-actions form { display: inline; }
+.section-tabs { padding: 0 0 .45rem; }
+.section-tabs a { display: inline-block; min-height: 2.2rem; border: 1px solid var(--line); margin: .15rem .2rem .15rem 0; padding: .35rem .6rem; background: var(--paper); color: var(--ink); font: inherit; font-size: .85rem; font-weight: bold; text-decoration: none; }
+.section-tabs a.active { background: var(--ink); color: var(--paper); border-color: var(--ink); }
+.link-btn { display: inline; min-height: 0; border: 0; margin: 0; padding: 0; background: none; color: inherit; font: inherit; font-weight: normal; text-decoration: underline; cursor: pointer; }
+nav form, .context-bar form, .book-actions form { display: inline; }
 .section-heading { position: relative; border-bottom: 2px solid var(--ink); margin: 1rem 0 .8rem; min-height: 2.7rem; }
 .section-heading h2 { display: inline-block; margin: 0 0 .35rem; }
 .section-heading > a { float: right; padding: .35rem; }
@@ -57,7 +67,9 @@ textarea { min-height: 9rem; }
 .sort-bar a { min-height: 2.2rem; padding: .3rem .5rem; font-size: .85rem; }
 .browse-list li { padding: .4rem 0; }
 .error, .rejected { font-weight: bold; }
-footer { clear: both; border-top: 2px solid var(--ink); padding: 1rem 0 2rem; }
-footer p { font-size: .8rem; }
+.page-bar { padding: .3rem 0; text-align: center; }
+.page-bar:empty { padding: 0; }
+.page-bar .button { min-height: 2.3rem; margin: .15rem; padding: .35rem .6rem; }
+.page-bar .page-indicator { display: inline-block; margin: 0 .5rem; font-weight: bold; font-size: .85rem; }
 @media (max-width: 30rem) { body { font-size: 17px; } .main-nav a { width: 47%; text-align: center; } .book-hero, .book-hero > * { display: block; } .book-hero > div { padding-left: 0; } .book-hero .detail-cover { width: 9rem; margin: 0 auto 1rem; } }
 @media (prefers-color-scheme: dark) { :root { --paper: #111; --ink: #fff; --soft: #222; --line: #aaa; --muted: #ccc; } .muted { color: #ccc; } }

@@ -3,18 +3,58 @@
 {% macro external_item(item) -%}{% set authors = item.authors_json|fromjson %}<article class="book-row">{% if item.cover_url %}<div class="book-cover"><img src="{{ item.cover_url }}" alt="" loading="lazy"></div>{% endif %}<div class="book-body"><h3><a href="{{ discovery_book_url(item, return_to) }}">{{ item.title }}</a></h3><p>{{ authors|join(', ') }} · Open Library{% if item.publication_date %} · {{ item.publication_date }}{% endif %}</p></div></article>{%- endmacro %}
 {% macro provider_item(book) -%}<article class="book-row">{% if book.cover_url %}<div class="book-cover"><img src="{{ book.cover_url }}" alt="" loading="lazy"></div>{% endif %}<div class="book-body"><h3><a href="{{ discovery_book_url(book, return_to) }}">{{ book.title }}</a></h3><p>{{ book.authors|join(', ') }} · {{ 'The New York Times' if book.source == 'nytimes' else 'Hardcover' }}{% if book.published_year %} · {{ book.published_year }}{% endif %}</p></div></article>{%- endmacro %}
 {% block title %}Discover · Digest{% endblock %}
+{% set panel = 'search' if q else (request.query_params.get('panel') or 'for-you') %}
+{% set page = (request.query_params.get('page', '1')|int) %}
+{% set page = page if page > 0 else 1 %}
+{% set page_size = 8 %}
+{% set trending_uses_legacy = trending|length > 0 %}
+{% set trending_items = trending if trending_uses_legacy else provider_books %}
+{% set new_releases_uses_provider = mode == 'hardcover-new-releases' and provider_books|length > 0 %}
+{% set newrel_items = provider_books if new_releases_uses_provider else new_releases %}
+{% set bestseller_items = provider_books if mode == 'bestsellers' else [] %}
+{% set genre_items_active = hardcover_genre_books if hardcover_genre_books|length > 0 else genre_items %}
 {% block content %}
-<h2>Discover</h2><p class="section-note">Search, browse, or choose a library suggestion.</p>
-<section><h2>Find a book</h2><form method="get"><label>Title or author<input type="search" name="q" value="{{ q }}" required></label><button>Search</button></form></section>
-<section><h2>Browse Books</h2><p><a href="/discover?mode=hardcover-trending&period=now">Trending</a> · <a href="/discover?mode=hardcover-new-releases">New Releases</a> · <a href="/discover?mode=bestseller-lists">Best Sellers</a></p>{% if mode in ['hardcover-trending', 'hardcover-new-releases'] %}<form method="get"><input type="hidden" name="mode" value="{{ mode }}">{% if mode == 'hardcover-trending' %}<label>Timeframe<select name="period"><option value="now">Now</option><option value="3m">Past 3 Months</option><option value="12m">Past 12 Months</option><option value="all">Last 20 Years</option></select></label>{% endif %}<label>Genre<select name="genre"><option value="">All genres</option>{% for value in hardcover_genres %}<option value="{{ value }}">{{ value }}</option>{% endfor %}</select></label><button>Load</button></form>{% endif %}</section>
-{% if provider_error %}<p class="error">{{ provider_error }}</p>{% endif %}
-{% if mode == 'bestseller-lists' %}<section><h2>Best Sellers</h2><ul>{% for item in bestseller_lists %}<li><a href="/discover?mode=bestseller-weeks&slug={{ item.slug|urlencode }}">{{ item.title }}</a></li>{% endfor %}</ul></section>{% elif mode == 'bestseller-weeks' %}<section><h2>{{ selected_list }}</h2><ul><li><a href="/discover?mode=bestsellers&slug={{ selected_slug|urlencode }}&week=current">Latest List</a></li>{% for item in bestseller_weeks %}<li><a href="/discover?mode=bestsellers&slug={{ selected_slug|urlencode }}&week={{ item.date }}">{{ item.title }}</a></li>{% endfor %}</ul></section>{% endif %}
-{% if provider_books %}<section><h2>{{ provider_title }}</h2><div class="book-list">{% for book in provider_books %}{{ provider_item(book) }}{% endfor %}</div>{% if mode == 'bestsellers' %}<p>Best seller data provided by The New York Times.</p>{% endif %}</section>{% elif mode == 'search' and not provider_error %}<p>No books matched your search.</p>{% endif %}
-{% if trending %}<section><h2>Trending Now</h2><div class="book-list">{% for item in trending %}{{ external_item(item) }}{% endfor %}</div></section>{% endif %}
-{% if hardcover_genre_books or genre_items %}<section><h2>Browse by Genre</h2><p>{% for slug, label in genres.items() %}<a href="/discover?genre={{ slug }}">{% if slug == selected_genre %}<strong>{{ label }}</strong>{% else %}{{ label }}{% endif %}</a>{% if not loop.last %} · {% endif %}{% endfor %}</p><div class="book-list">{% if hardcover_genre_books %}{% for book in hardcover_genre_books %}{{ provider_item(book) }}{% endfor %}{% else %}{% for item in genre_items %}{{ external_item(item) }}{% endfor %}{% endif %}</div></section>{% endif %}
+<h2>Discover</h2>
+<form method="get" class="search-form"><label>Title or author<input type="search" name="q" value="{{ q }}" required></label><button>Search</button></form>
+{% if not q %}
+<nav class="section-tabs" aria-label="Discover sections"><a href="/discover?panel=for-you"{% if panel == 'for-you' %} class="active" aria-current="page"{% endif %}>For You</a><a href="/discover?mode=hardcover-trending&period=now&panel=trending"{% if panel == 'trending' %} class="active" aria-current="page"{% endif %}>Trending</a><a href="/discover?mode=hardcover-new-releases&panel=new-releases"{% if panel == 'new-releases' %} class="active" aria-current="page"{% endif %}>New Releases</a><a href="/discover?mode=bestseller-lists&panel=bestsellers"{% if panel == 'bestsellers' %} class="active" aria-current="page"{% endif %}>Best Sellers</a><a href="/discover?panel=genre&genre={{ selected_genre|urlencode }}"{% if panel == 'genre' %} class="active" aria-current="page"{% endif %}>Browse by Genre</a></nav>
+{% endif %}
+{% if provider_error and panel in ['search', 'trending', 'new-releases', 'bestsellers'] %}<p class="error">{{ provider_error }}</p>{% endif %}
+
+{% if panel == 'search' %}
+<h2>{{ provider_title }}</h2>
+<div class="book-list">{% for book in provider_books[(page-1)*page_size : page*page_size] %}{{ provider_item(book) }}{% else %}{% if not provider_error %}<p>No books matched your search.</p>{% endif %}{% endfor %}</div>
+
+{% elif panel == 'trending' %}
+{% if not trending_uses_legacy %}<form method="get"><input type="hidden" name="mode" value="hardcover-trending"><input type="hidden" name="panel" value="trending"><label>Timeframe<select name="period"><option value="now"{% if period == 'now' %} selected{% endif %}>Now</option><option value="3m"{% if period == '3m' %} selected{% endif %}>Past 3 Months</option><option value="12m"{% if period == '12m' %} selected{% endif %}>Past 12 Months</option><option value="all"{% if period == 'all' %} selected{% endif %}>Last 20 Years</option></select></label><label>Genre<select name="genre"><option value="">All genres</option>{% for value in hardcover_genres %}<option value="{{ value }}">{{ value }}</option>{% endfor %}</select></label><button>Load</button></form>{% endif %}
+<h2>{{ provider_title if not trending_uses_legacy else 'Trending Now' }}</h2>
+<div class="book-list">{% for item in trending_items[(page-1)*page_size : page*page_size] %}{{ external_item(item) if trending_uses_legacy else provider_item(item) }}{% else %}{% if not provider_error %}<p>No trending books found.</p>{% endif %}{% endfor %}</div>
+
+{% elif panel == 'new-releases' %}
+{% if new_releases_uses_provider or (not new_releases and not provider_error) %}<form method="get"><input type="hidden" name="mode" value="hardcover-new-releases"><input type="hidden" name="panel" value="new-releases"><label>Genre<select name="genre"><option value="">All genres</option>{% for value in hardcover_genres %}<option value="{{ value }}">{{ value }}</option>{% endfor %}</select></label><button>Load</button></form>{% endif %}
+<h2>{{ provider_title if new_releases_uses_provider else 'New Releases' }}</h2>
+<div class="book-list">{% for item in newrel_items[(page-1)*page_size : page*page_size] %}{{ provider_item(item) if new_releases_uses_provider else book_item(item, 'new') }}{% else %}{% if not provider_error %}<p>No new releases found.</p>{% endif %}{% endfor %}</div>
+
+{% elif panel == 'bestsellers' %}
+{% if mode == 'bestseller-lists' %}<h2>Best Sellers</h2><ul>{% for item in bestseller_lists %}<li><a href="/discover?mode=bestseller-weeks&slug={{ item.slug|urlencode }}&panel=bestsellers">{{ item.title }}</a></li>{% endfor %}</ul>
+{% elif mode == 'bestseller-weeks' %}<h2>{{ selected_list }}</h2><ul><li><a href="/discover?mode=bestsellers&slug={{ selected_slug|urlencode }}&week=current&panel=bestsellers">Latest List</a></li>{% for item in bestseller_weeks %}<li><a href="/discover?mode=bestsellers&slug={{ selected_slug|urlencode }}&week={{ item.date }}&panel=bestsellers">{{ item.title }}</a></li>{% endfor %}</ul>
+{% elif mode == 'bestsellers' %}<h2>{{ provider_title }}</h2><div class="book-list">{% for book in bestseller_items[(page-1)*page_size : page*page_size] %}{{ provider_item(book) }}{% else %}{% if not provider_error %}<p>No best sellers found.</p>{% endif %}{% endfor %}</div><p>Best seller data provided by The New York Times.</p>
+{% endif %}
+
+{% elif panel == 'genre' %}
+<p>{% for slug, label in genres.items() %}<a href="/discover?genre={{ slug }}&panel=genre">{% if slug == selected_genre %}<strong>{{ label }}</strong>{% else %}{{ label }}{% endif %}</a>{% if not loop.last %} · {% endif %}{% endfor %}</p>
+<div class="book-list">{% for item in genre_items_active[(page-1)*page_size : page*page_size] %}{{ provider_item(item) if hardcover_genre_books|length > 0 else external_item(item) }}{% else %}<p>No books found for this genre.</p>{% endfor %}</div>
+
+{% else %}
 {% if recommended %}<section><h2>For You</h2><div class="book-list">{% for book in recommended %}{{ book_item(book, 'recommended', recommendation_reasons[book.id]) }}{% endfor %}</div></section>{% endif %}
 {% if continue_series %}<section><h2>Continue a Series</h2><div class="book-list">{% for book in continue_series %}{{ book_item(book, 'series') }}{% endfor %}</div></section>{% endif %}
 {% if popular %}<section><h2>Popular in Your Library</h2><div class="book-list">{% for book in popular %}{{ book_item(book, 'popular') }}{% endfor %}</div></section>{% endif %}
 {% if new_releases %}<section><h2>New Releases</h2><div class="book-list">{% for book in new_releases %}{{ book_item(book, 'new') }}{% endfor %}</div></section>{% endif %}
-{% if not trending and not genre_items and not recommended and not continue_series and not popular and not new_releases and mode != 'search' %}<p>Rate books, mark favourites, and update reading status to improve your suggestions.</p>{% endif %}
+{% if not recommended and not continue_series and not popular and not new_releases %}<p>Rate books, mark favourites, and update reading status to improve your suggestions.</p>{% endif %}
+{% endif %}
 {% endblock %}
+{% block pager %}{% if panel == 'search' %}{% if page > 1 %}<a class="button" href="/discover?q={{ q|urlencode }}&page={{ page-1 }}">← Prev</a>{% endif %}<span class="page-indicator">Page {{ page }}</span>{% if provider_books|length > page*page_size %}<a class="button" href="/discover?q={{ q|urlencode }}&page={{ page+1 }}">Next →</a>{% endif %}
+{% elif panel == 'trending' %}{% if page > 1 %}<a class="button" href="/discover?mode=hardcover-trending&period={{ period }}&genre={{ selected_genre|urlencode }}&panel=trending&page={{ page-1 }}">← Prev</a>{% endif %}<span class="page-indicator">Page {{ page }}</span>{% if trending_items|length > page*page_size %}<a class="button" href="/discover?mode=hardcover-trending&period={{ period }}&genre={{ selected_genre|urlencode }}&panel=trending&page={{ page+1 }}">Next →</a>{% endif %}
+{% elif panel == 'new-releases' %}{% if page > 1 %}<a class="button" href="/discover?mode=hardcover-new-releases&genre={{ selected_genre|urlencode }}&panel=new-releases&page={{ page-1 }}">← Prev</a>{% endif %}<span class="page-indicator">Page {{ page }}</span>{% if newrel_items|length > page*page_size %}<a class="button" href="/discover?mode=hardcover-new-releases&genre={{ selected_genre|urlencode }}&panel=new-releases&page={{ page+1 }}">Next →</a>{% endif %}
+{% elif panel == 'bestsellers' and mode == 'bestsellers' %}{% if page > 1 %}<a class="button" href="/discover?mode=bestsellers&slug={{ selected_slug|urlencode }}&week={{ week }}&panel=bestsellers&page={{ page-1 }}">← Prev</a>{% endif %}<span class="page-indicator">Page {{ page }}</span>{% if bestseller_items|length > page*page_size %}<a class="button" href="/discover?mode=bestsellers&slug={{ selected_slug|urlencode }}&week={{ week }}&panel=bestsellers&page={{ page+1 }}">Next →</a>{% endif %}
+{% elif panel == 'genre' %}{% if page > 1 %}<a class="button" href="/discover?genre={{ selected_genre|urlencode }}&panel=genre&page={{ page-1 }}">← Prev</a>{% endif %}<span class="page-indicator">Page {{ page }}</span>{% if genre_items_active|length > page*page_size %}<a class="button" href="/discover?genre={{ selected_genre|urlencode }}&panel=genre&page={{ page+1 }}">Next →</a>{% endif %}{% endif %}{% endblock %}

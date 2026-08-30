@@ -544,6 +544,11 @@ def library(
     user = user_or_none(request, db)
     if not user:
         return RedirectResponse("/setup" if setup_required(db) else "/login", 303)
+    if is_ereader_request(request) and not (q or author or series or view):
+        # The e-reader layout always shows one paginated section at a time
+        # instead of the stacked dashboard the modern layout uses, so land on
+        # "Recent" rather than the unfiltered (dashboard) branch below.
+        view = "latest"
     query = select(Book).where(Book.review_state == ReviewState.READY)
     if view in {"reading", "favourites", "rated"}:
         query = query.join(ReadingState, ReadingState.book_id == Book.id).where(
@@ -888,6 +893,7 @@ def discover(
             "bestseller_weeks": bestseller_weeks,
             "selected_list": selected_list,
             "selected_slug": slug,
+            "week": week,
             "hardcover_genres": HARDCOVER_FALLBACK_GENRES,
             "return_to": return_to,
         },

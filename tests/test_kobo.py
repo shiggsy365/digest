@@ -179,6 +179,48 @@ def test_sync_contains_only_compatible_books_on_selected_shelf(tmp_path: Path) -
         assert db.query(KoboSyncedBook).count() == 0
 
 
+def test_large_backlog_is_spread_across_multiple_syncs(tmp_path: Path) -> None:
+    with kobo_session() as db:
+        user = make_user(db)
+        user.kobo_sync_all_books = True
+        book_count = 120
+        for index in range(book_count):
+            path = tmp_path / f"book-{index}.kepub"
+            path.write_bytes(b"book")
+            book = Book(
+                title=f"Book {index}",
+                primary_author="Author",
+                review_state=ReviewState.READY,
+            )
+            db.add(book)
+            db.flush()
+            db.add(
+                BookFile(
+                    book_id=book.id,
+                    path=str(path),
+                    sha256=f"{index:064x}",
+                    format="kepub",
+                    size_bytes=4,
+                    modified_ns=1,
+                )
+            )
+        db.commit()
+
+        first = sync_payload(db, user, "https://digest.example", "secret")
+        assert len(first) == 50
+        assert db.query(KoboSyncedBook).count() == 50
+
+        second = sync_payload(db, user, "https://digest.example", "secret")
+        assert len(second) == 50
+        assert db.query(KoboSyncedBook).count() == 100
+
+        third = sync_payload(db, user, "https://digest.example", "secret")
+        assert len(third) == book_count - 100
+        assert db.query(KoboSyncedBook).count() == book_count
+
+        assert sync_payload(db, user, "https://digest.example", "secret") == []
+
+
 def test_kepub_is_preferred_and_metadata_falls_back_to_epub(tmp_path: Path) -> None:
     epub = tmp_path / "book.epub"
     kepub = tmp_path / "book.kepub"

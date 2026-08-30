@@ -25,6 +25,13 @@ from .models import (
 )
 from .security import KOBO_TOKEN_NAME, token_digest
 
+# Kobo devices are memory-constrained and can fail partway through an
+# unbounded sync response. Cap how many full book entitlements (new books or
+# books with changed metadata) a single sync call builds; a large backlog -
+# for example right after a token refresh wipes all sync tracking - is spread
+# across several sync calls instead of one huge response.
+MAX_ENTITLEMENTS_PER_SYNC = 50
+
 
 def kobo_user(db: Session, token: str) -> User:
     item = db.scalar(
@@ -548,14 +555,27 @@ def sync_payload(db: Session, user: User, base_url: str, token: str) -> list[dic
             }
         )
         db.delete(item)
+    delivered_book_ids: set[str] = set()
+    heavy_entitlements_sent = 0
     for book in books.values():
-        state = get_reading_state(db, user, book)
-        book_revision = revision(book.updated_at)
-        reading_revision = revision(state.updated_at)
         item = tracked.get(book.id)
         if item is not None and item.archived:
             continue
-        if item is None:
+        book_revision = revision(book.updated_at)
+        is_new = item is None
+        is_changed = item is not None and item.book_revision != book_revision
+        if (is_new or is_changed) and heavy_entitlements_sent >= MAX_ENTITLEMENTS_PER_SYNC:
+            # A large backlog (e.g. right after a token refresh wipes sync
+            # tracking) would otherwise be sent as one huge response that can
+            # overwhelm the device partway through. Leave the rest of the
+            # backlog for later sync calls instead; the device already knows
+            # about this book, so referencing it in shelf tags below is safe.
+            if item is not None:
+                delivered_book_ids.add(book.id)
+            continue
+        state = get_reading_state(db, user, book)
+        reading_revision = revision(state.updated_at)
+        if is_new:
             results.append(
                 {
                     "NewEntitlement": {
@@ -573,8 +593,11 @@ def sync_payload(db: Session, user: User, base_url: str, token: str) -> list[dic
                     reading_revision=reading_revision,
                 )
             )
+            delivered_book_ids.add(book.id)
+            heavy_entitlements_sent += 1
             continue
-        if item.book_revision != book_revision:
+        delivered_book_ids.add(book.id)
+        if is_changed:
             results.append(
                 {
                     "ChangedEntitlement": {
@@ -584,6 +607,7 @@ def sync_payload(db: Session, user: User, base_url: str, token: str) -> list[dic
                     }
                 }
             )
+            heavy_entitlements_sent += 1
         elif item.reading_revision != reading_revision:
             results.append(
                 {
@@ -595,12 +619,7 @@ def sync_payload(db: Session, user: User, base_url: str, token: str) -> list[dic
         item.book_revision = book_revision
         item.reading_revision = reading_revision
         item.synced_at = now()
-    available_book_ids = {
-        book_id
-        for book_id in books
-        if tracked.get(book_id) is None or not tracked[book_id].archived
-    }
-    sync_tags(db, user, available_book_ids, results)
+    sync_tags(db, user, delivered_book_ids, results)
     db.commit()
     return results
 
