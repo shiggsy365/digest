@@ -31,6 +31,13 @@
   }
   function api(path, done) { ajax('GET', '/api/ereader' + path, null, done); }
   function fail(error) { content.innerHTML = '<main><p class="error">' + esc(error) + '</p></main>'; }
+  function moreByAuthor(author) {
+    var returnTo;
+    if (!author) return '';
+    returnTo = location.pathname + location.search + location.hash;
+    return '<a href="/discover/author?author=' + encodeURIComponent(author) + '&return_to=' +
+      encodeURIComponent(returnTo) + '">More by this author</a>';
+  }
   function row(book) {
     var cover = book.cover_url ? '<img src="' + esc(book.cover_url) + '" alt="">' : '';
     var author = book.author || (book.authors || [])[0] || '';
@@ -197,7 +204,8 @@
         (data.cover_url ? '<img src="' + esc(data.cover_url) + '" alt="">' : '') +
         '<div><h1>' + esc(data.title) + '</h1><p>' + esc(data.author) + '</p></div></div>' +
         '<div class="description">' + esc(data.description || 'No description available.') + '</div>' +
-        '<div class="actions"><button data-kindle="' + esc(data.id) + '">Send to Kindle</button>' +
+        '<div class="actions">' + moreByAuthor(data.author) + '<button data-kindle="' +
+        esc(data.id) + '">Send to Kindle</button>' +
         '<span id="book-message"></span></div></main>';
       state.pages = [];
       document.querySelector('[data-page="first"]').style.display = 'none';
@@ -222,7 +230,8 @@
         (data.cover_url ? '<img src="' + esc(data.cover_url) + '" alt="">' : '') +
         '<div><h1>' + esc(data.title) + '</h1><p>' + esc(data.author || '') + '</p></div></div>' +
         '<div class="description">' + esc(data.description || 'No description available.') + '</div>' +
-        '<div class="actions">' + target + '<span id="book-message"></span></div></main>';
+        '<div class="actions">' + moreByAuthor(data.author) + target +
+        '<span id="book-message"></span></div></main>';
       state.pages = [];
       state.detail = false;
       document.querySelector('[data-page="first"]').style.display = 'none';
