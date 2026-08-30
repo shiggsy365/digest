@@ -109,6 +109,25 @@ app.add_middleware(
     same_site="lax",
     https_only=settings.public_url.startswith("https://"),
 )
+
+
+@app.middleware("http")
+async def choose_session_lifetime(request: Request, call_next):
+    """Use a browser-session cookie unless the user explicitly asks to be remembered."""
+    response = await call_next(request)
+    if not request.session.get("remember_me"):
+        response.raw_headers = [
+            (
+                name,
+                re.sub(rb"; Max-Age=\d+", b"", value, flags=re.IGNORECASE)
+                if name.lower() == b"set-cookie" and value.startswith(b"session=")
+                else value,
+            )
+            for name, value in response.raw_headers
+        ]
+    return response
+
+
 base = Path(__file__).parent
 app.mount("/static", StaticFiles(directory=base / "static"), name="static")
 templates = Jinja2Templates(directory=base / "templates")
@@ -467,6 +486,7 @@ def login(
     username: Annotated[str, Form()],
     password: Annotated[str, Form()],
     form_csrf: Annotated[str, Form()],
+    remember_me: Annotated[str | None, Form()] = None,
 ):
     check_csrf(request, form_csrf)
     user = db.scalar(select(User).where(func.lower(User.username) == username.strip().lower()))
@@ -475,9 +495,15 @@ def login(
             AuditEvent(level="warning", event="login", message=f"Failed login for {username[:80]}")
         )
         db.commit()
-        return render(request, "login.html", {"error": "Invalid username or password."})
+        return render(
+            request,
+            "login.html",
+            {"error": "Invalid username or password.", "remember_me": bool(remember_me)},
+        )
     request.session.clear()
     request.session["user_id"] = user.id
+    if remember_me:
+        request.session["remember_me"] = True
     db.add(AuditEvent(event="login", user_id=user.id, message="Login successful"))
     db.commit()
     return RedirectResponse("/", 303)
