@@ -1,5 +1,5 @@
 {% extends "ereader/base.html" %}
-{% macro book_item(book, navigation) -%}<article class="book-row"><h3><a href="/books/{{ book.id }}?return_to={{ return_to|urlencode }}&navigation={{ navigation|urlencode }}">{{ book.title }}</a></h3><p>{{ book.primary_author }}{% if book.series %} · {{ book.series }}{% if book.series_number is not none %} #{{ book.series_number|int }}{% endif %}{% endif %}</p></article>{%- endmacro %}
+{% macro book_item(book, navigation) -%}<article class="book-row">{% if book.cover_path %}<div class="book-cover"><img src="/books/{{ book.id }}/cover?v={{ book.updated_at|coverversion }}" alt="" loading="lazy"></div>{% endif %}<div class="book-body"><h3><a href="/books/{{ book.id }}?return_to={{ return_to|urlencode }}&navigation={{ navigation|urlencode }}">{{ book.title }}</a></h3><p>{{ book.primary_author }}{% if book.series %} · {{ book.series }}{% if book.series_number is not none %} #{{ book.series_number|int }}{% endif %}{% endif %}</p></div></article>{%- endmacro %}
 {% macro directory_item(name, count, kind) -%}<a class="directory-tile" href="/?{{ kind }}={{ name|urlencode }}"><strong>{{ name }}</strong><span>{{ count }} book{% if count != 1 %}s{% endif %}</span></a>{%- endmacro %}
 {% block content %}
 <form method="get" class="search-form"><label>Search library<input name="q" value="{{ q }}"></label><button>Search</button></form>

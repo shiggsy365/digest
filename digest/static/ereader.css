@@ -14,6 +14,7 @@ a { color: var(--ink); }
 .main-nav { padding: .45rem 0; }
 .main-nav a, .button, button, .sort-bar a { display: inline-block; min-height: 2.7rem; border: 2px solid var(--ink); margin: .2rem; padding: .5rem .7rem; background: var(--paper); color: var(--ink); font: inherit; font-weight: bold; text-decoration: none; }
 .main-nav a:focus, .button:focus, button:focus, .sort-bar a:focus { outline: 2px solid var(--ink); outline-offset: 1px; }
+.main-nav a.active { background: var(--ink); color: var(--paper); }
 nav form, footer form, .book-actions form { display: inline; }
 .section-heading { position: relative; border-bottom: 2px solid var(--ink); margin: 1rem 0 .8rem; min-height: 2.7rem; }
 .section-heading h2 { display: inline-block; margin: 0 0 .35rem; }
@@ -23,7 +24,11 @@ input, select, textarea { display: block; width: 100%; min-height: 2.8rem; borde
 input[type="checkbox"] { display: inline-block; width: auto; min-height: 0; }
 textarea { min-height: 9rem; }
 .book-list { width: 100%; }
-.book-row { display: block; min-height: 4.3rem; margin: 0 0 .35rem; padding: .55rem .7rem; border: 2px solid var(--ink); background: var(--paper); overflow: hidden; }
+.book-row { display: table; table-layout: fixed; width: 100%; min-height: 4.3rem; margin: 0 0 .35rem; border: 2px solid var(--ink); background: var(--paper); overflow: hidden; }
+.book-row > .book-cover, .book-row > .book-body { display: table-cell; vertical-align: top; }
+.book-row > .book-cover { width: 3.7rem; padding: .5rem 0 .5rem .5rem; }
+.book-row > .book-cover img { display: block; width: 3rem; height: auto; border: 1px solid var(--line); }
+.book-row > .book-body { padding: .55rem .7rem; }
 .book-row h3 { margin: 0; font-size: 1.05rem; line-height: 1.2; }.book-row h3 a { display: block; text-decoration: none; }.book-row p { margin: .25rem 0 0; font-size: .85rem; line-height: 1.2; color: var(--muted); }
 .book-grid { width: 100%; margin: 0; }
 .book-grid .book { display: block; margin: 0 0 .35rem; padding: .55rem .7rem; border: 2px solid var(--ink); font-size: 18px; min-height: 4.3rem; }
