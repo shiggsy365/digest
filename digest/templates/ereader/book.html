@@ -13,7 +13,8 @@
   <section class="book-actions">
     {% for file in book.files %}<a class="button" href="/books/{{ book.id }}/file/{{ file.id }}">Download {{ file.format|upper }}</a>{% endfor %}
     {% if user.kindle_email %}<form method="post" action="/books/{{ book.id }}/kindle"><input type="hidden" name="form_csrf" value="{{ csrf }}"><button>Send EPUB to Kindle</button></form>{% endif %}
-    {% if user.role.value == 'admin' %}<a class="button" href="/review/{{ book.id }}?return_to={{ detail_url|urlencode }}">Edit metadata</a><form method="post" action="/books/{{ book.id }}/delete"><input type="hidden" name="form_csrf" value="{{ csrf }}"><button>Delete book and files</button></form>{% endif %}
+    {% if user.role.value == 'admin' %}<a class="button" href="/review/{{ book.id }}?return_to={{ detail_url|urlencode }}">Edit metadata</a>{% endif %}
   </section>
+  {% if user.role.value == 'admin' %}<section class="book-actions danger-zone"><form method="post" action="/books/{{ book.id }}/delete" onsubmit="return confirm('Permanently delete this book and all its files? This cannot be undone.')"><input type="hidden" name="form_csrf" value="{{ csrf }}"><button class="danger">Delete book and files</button><span class="danger-note">Permanently removes the book and its files. This can't be undone.</span></form></section>{% endif %}
 </article>
 {% endblock %}

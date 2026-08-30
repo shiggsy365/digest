@@ -182,6 +182,25 @@ function pagedGo(direction) {
     if (last) last.onclick = function () { pagedGo('last'); };
 })();
 
+function copyKoboEndpoint(button) {
+    var input = document.getElementById('kobo-endpoint');
+    if (!input) return;
+    input.focus();
+    input.select();
+    var done = function (ok) {
+        var original = button.textContent;
+        button.textContent = ok ? 'Copied' : 'Select and copy manually';
+        setTimeout(function () { button.textContent = original; }, 2000);
+    };
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(input.value).then(function () { done(true); }, function () { done(false); });
+    } else {
+        var ok = false;
+        try { ok = document.execCommand('copy'); } catch (ignore) {}
+        done(ok);
+    }
+}
+
 fitDigestShell();
 window.onload = fitDigestShell;
 window.onresize = fitDigestShell;
