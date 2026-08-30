@@ -3,5 +3,5 @@
 {% block content %}
 <p><a href="{{ return_to }}">← Back to book</a></p><h2>More by {{ author }}</h2>
 {% if provider_error %}<p class="error">{{ provider_error }}</p>{% endif %}
-{% if rows %}{% for row in rows %}{% set item = row.item %}<article class="book">{% if item.cover_url %}<a href="{{ discovery_book_url(item, author_url) }}"><img class="cover" src="{{ item.cover_url }}" alt="Cover of {{ item.title }}"></a>{% else %}<h3><a href="{{ discovery_book_url(item, author_url) }}">{{ item.title }}</a></h3><p>{{ item.author }}{% if item.published_year %} · {{ item.published_year }}{% endif %}</p>{% endif %}{% if row.available %}<p><strong>Available</strong></p>{% endif %}</article>{% endfor %}{% elif not provider_error %}<p>No bibliography results were found for this author.</p>{% endif %}
+{% if rows %}<div class="book-list">{% for row in rows %}{% set item = row.item %}<article class="book-row"><h3><a href="{{ discovery_book_url(item, author_url) }}">{{ item.title }}</a></h3><p>{{ item.author }}{% if item.published_year %} · {{ item.published_year }}{% endif %}{% if row.available %} · Available{% endif %}</p></article>{% endfor %}</div>{% elif not provider_error %}<p>No bibliography results were found for this author.</p>{% endif %}
 {% endblock %}

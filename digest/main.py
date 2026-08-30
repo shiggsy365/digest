@@ -2022,7 +2022,7 @@ def revoke_kobo_token(
 @app.get("/kobo/{token}/v1/initialization")
 def kobo_initialize(token: str, request: Request, db: Annotated[Session, Depends(get_db)]):
     kobo_user(db, token)
-    response = JSONResponse(kobo_initialization(request, token))
+    response = JSONResponse(kobo_initialization(settings.public_url, token))
     response.headers["x-kobo-apitoken"] = "e30="
     return response
 
@@ -2041,8 +2041,7 @@ def kobo_auth(
 @app.get("/kobo/{token}/v1/library/sync")
 def kobo_sync(token: str, request: Request, db: Annotated[Session, Depends(get_db)]):
     user = kobo_user(db, token)
-    base_url = str(request.base_url).rstrip("/")
-    return JSONResponse(sync_payload(db, user, base_url, token))
+    return JSONResponse(sync_payload(db, user, settings.public_url.rstrip("/"), token))
 
 
 @app.get("/kobo/{token}/v1/library/{book_id}/metadata")
@@ -2051,7 +2050,7 @@ def kobo_book_metadata(
 ):
     user = kobo_user(db, token)
     book = kobo_shelf_book(db, user, book_id)
-    return [kobo_metadata(book, str(request.base_url).rstrip("/"), token)]
+    return [kobo_metadata(book, settings.public_url.rstrip("/"), token)]
 
 
 @app.api_route("/kobo/{token}/v1/library/{book_id}/state", methods=["GET", "PUT"])

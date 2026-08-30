@@ -1,17 +1,17 @@
-:root { --paper: #fff; --ink: #111; --soft: #eee; --line: #555; }
+:root { --paper: #fff; --ink: #111; --soft: #eee; --line: #555; --muted: #444; }
 * { box-sizing: border-box; }
 body { margin: 0; background: var(--paper); color: var(--ink); font: 18px/1.4 Georgia, serif; }
-header, main, footer { width: 94%; max-width: 64rem; margin: 0 auto; }
-header { padding-top: .5rem; border-bottom: 3px solid var(--ink); }
-.header-row { position: relative; min-height: 3rem; }
-h1 { margin: .2rem 0 .6rem; font-size: 2rem; }
-h1 a { text-decoration: none; }
-.header-settings { position: absolute; top: .3rem; right: 0; }
+main, footer, .main-nav { width: 94%; max-width: 48rem; margin: 0 auto; }
+.context-bar { width: 100%; background: var(--ink); color: var(--paper); border-bottom: 2px solid var(--ink); }
+.context-bar table { width: 94%; max-width: 48rem; margin: 0 auto; border-collapse: collapse; table-layout: fixed; }
+.context-bar td { height: 2.7rem; overflow: hidden; text-align: center; white-space: nowrap; }
+.context-bar td:first-child { text-align: left; }.context-bar td:last-child { text-align: right; }
+.context-bar a { color: var(--paper); font-weight: bold; }
 h2, h3 { line-height: 1.15; }
 main { padding: .8rem 0 2rem; }
 section { clear: both; margin: 0 0 2rem; }
 a { color: var(--ink); }
-.main-nav { margin: 0 -.25rem; padding: 0 0 .5rem; }
+.main-nav { padding: .45rem 0; }
 .main-nav a, .button, button, .sort-bar a { display: inline-block; min-height: 2.7rem; border: 2px solid var(--ink); margin: .2rem; padding: .5rem .7rem; background: var(--paper); color: var(--ink); font: inherit; font-weight: bold; text-decoration: none; }
 .main-nav a:focus, .button:focus, button:focus, .sort-bar a:focus { outline: 2px solid var(--ink); outline-offset: 1px; }
 nav form, footer form, .book-actions form { display: inline; }
@@ -22,14 +22,17 @@ label { display: block; margin: .8rem 0; }
 input, select, textarea { display: block; width: 100%; min-height: 2.8rem; border: 2px solid var(--line); padding: .55rem; background: var(--paper); color: var(--ink); font: inherit; }
 input[type="checkbox"] { display: inline-block; width: auto; min-height: 0; }
 textarea { min-height: 9rem; }
-.book-grid { width: 100%; margin: 0 -.5%; font-size: 0; }
-.book-grid .book { display: inline-block; vertical-align: top; width: 24%; margin: 0 .5% 1.25rem; padding: 0; border: 0; font-size: 18px; }
+.book-list { width: 100%; }
+.book-row { display: block; min-height: 4.3rem; margin: 0 0 .35rem; padding: .55rem .7rem; border: 2px solid var(--ink); background: var(--paper); overflow: hidden; }
+.book-row h3 { margin: 0; font-size: 1.05rem; line-height: 1.2; }.book-row h3 a { display: block; text-decoration: none; }.book-row p { margin: .25rem 0 0; font-size: .85rem; line-height: 1.2; color: var(--muted); }
+.book-grid { width: 100%; margin: 0; }
+.book-grid .book { display: block; margin: 0 0 .35rem; padding: .55rem .7rem; border: 2px solid var(--ink); font-size: 18px; min-height: 4.3rem; }
+.book-grid .cover { display: none; }
 .directory-grid { width: 100%; margin: 0 -.5%; font-size: 0; }
 .directory-tile { display: inline-block; vertical-align: top; width: 24%; min-height: 6rem; margin: 0 .5% 1rem; padding: .7rem; border: 2px solid var(--line); font-size: 16px; text-decoration: none; }
 .directory-tile strong, .directory-tile span { display: block; }
 .directory-tile span { margin-top: .5rem; font-size: .8rem; }
 .book { border-bottom: 1px solid var(--line); padding: .8rem 0; }
-.book-grid .cover { width: 100%; max-width: none; }
 .cover { display: block; width: 10rem; max-width: 50%; height: auto; border: 1px solid var(--line); }
 .book-grid h3 { margin: .35rem 0 .1rem; font-size: 1rem; }
 .book-grid .book > p { margin: .25rem 0; font-size: .85rem; }
@@ -52,4 +55,4 @@ textarea { min-height: 9rem; }
 footer { clear: both; border-top: 2px solid var(--ink); padding: 1rem 0 2rem; }
 footer p { font-size: .8rem; }
 @media (max-width: 30rem) { body { font-size: 17px; } .main-nav a { width: 47%; text-align: center; } .book-hero, .book-hero > * { display: block; } .book-hero > div { padding-left: 0; } .book-hero .detail-cover { width: 9rem; margin: 0 auto 1rem; } }
-@media (prefers-color-scheme: dark) { :root { --paper: #111; --ink: #fff; --soft: #222; --line: #aaa; } .muted { color: #ccc; } }
+@media (prefers-color-scheme: dark) { :root { --paper: #111; --ink: #fff; --soft: #222; --line: #aaa; --muted: #ccc; } .muted { color: #ccc; } }

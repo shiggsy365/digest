@@ -94,21 +94,8 @@ def test_kobo_path_token_authenticates_only_an_active_device_token() -> None:
         assert exc.value.status_code == 401
 
 
-def test_initialization_routes_library_operations_back_to_digest() -> None:
-    request = Request(
-        {
-            "type": "http",
-            "method": "GET",
-            "scheme": "https",
-            "server": ("digest.example", 443),
-            "path": "/kobo/secret/v1/initialization",
-            "root_path": "",
-            "headers": [(b"host", b"digest.example")],
-            "query_string": b"",
-        }
-    )
-
-    resources = initialization(request, "secret")["Resources"]
+def test_initialization_routes_library_operations_to_configured_public_url() -> None:
+    resources = initialization("https://digest.example", "secret")["Resources"]
 
     assert resources["library_sync"] == (
         "https://digest.example/kobo/secret/v1/library/sync"

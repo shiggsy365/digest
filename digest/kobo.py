@@ -5,7 +5,7 @@ import uuid
 from datetime import UTC, datetime
 from pathlib import Path
 
-from fastapi import HTTPException, Request
+from fastapi import HTTPException
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
@@ -605,8 +605,14 @@ def sync_payload(db: Session, user: User, base_url: str, token: str) -> list[dic
     return results
 
 
-def initialization(request: Request, token: str) -> dict:
-    base_url = str(request.base_url).rstrip("/")
+def initialization(base_url: str, token: str) -> dict:
+    """Return Kobo endpoints rooted at Digest's configured public URL.
+
+    Kobo continues to use these URLs after the initial request. Building them
+    from the incoming request is unsafe behind a TLS-terminating proxy: the
+    application commonly sees HTTP even though the device connected by HTTPS.
+    """
+    base_url = base_url.rstrip("/")
     device_base = f"{base_url}/kobo/{token}"
     return {
         "Resources": {
