@@ -1,0 +1,8 @@
+{% extends "modern/base.html" %}
+{% block title %}Books by {{ author }} · Digest{% endblock %}
+{% block content %}
+<p><a href="{{ return_to }}">← Back to book</a></p>
+<div class="section-heading"><div><h2>More by {{ author }}</h2><p class="muted">Complete author results are not limited to the recent-discovery window.</p></div></div>
+{% if provider_error %}<p class="error">{{ provider_error }}</p>{% endif %}
+{% if rows %}<div class="grid">{% for row in rows %}{% set item = row.item %}<article class="card book-card external-book">{% if item.cover_url %}<a href="{{ discovery_book_url(item, author_url) }}"><img class="cover" src="{{ item.cover_url }}" alt="Cover of {{ item.title }}" loading="lazy"></a>{% else %}<h3><a href="{{ discovery_book_url(item, author_url) }}">{{ item.title }}</a></h3><p>{{ item.author }}</p>{% if item.published_year %}<p class="muted">Published {{ item.published_year }}</p>{% endif %}{% endif %}{% if row.available %}<p class="cover-series available-label">Available</p>{% endif %}</article>{% endfor %}</div>{% elif not provider_error %}<p>No bibliography results were found for this author.</p>{% endif %}
+{% endblock %}

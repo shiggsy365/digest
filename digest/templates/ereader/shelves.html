@@ -1,0 +1,12 @@
+{% extends "ereader/base.html" %}
+{% block content %}
+<h2>Shelves</h2>
+<p><a href="/?view=all">All Books</a> — {{ all_books_count }} book{% if all_books_count != 1 %}s{% endif %}</p>
+<form method="post" action="/shelves" class="panel">
+  <input type="hidden" name="form_csrf" value="{{ csrf }}">
+  <label>Shelf name<input name="name" required></label>
+  {% if user.role.value == 'admin' %}<label><input type="checkbox" name="shared" value="true"> Shared</label>{% endif %}
+  <button>Create shelf</button>
+</form>
+<ul>{% for shelf in shelves %}<li><a href="/shelves/{{ shelf.id }}">{{ shelf.name }}</a> — {{ counts[shelf.id] }} book{% if counts[shelf.id] != 1 %}s{% endif %}, {{ 'shared' if shelf.shared else 'private' }}</li>{% else %}<li>No user shelves yet.</li>{% endfor %}</ul>
+{% endblock %}

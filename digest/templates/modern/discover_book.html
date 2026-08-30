@@ -1,0 +1,36 @@
+{% extends "modern/base.html" %}
+{% block content %}
+<p><a href="{{ return_to }}">← Back to discover</a></p>
+<article class="book-detail">
+  <section class="book-hero card cover-backdrop"{% if item.cover_url %} style="--hero-cover:url('{{ item.cover_url }}')"{% endif %}>
+    {% if item.cover_url %}<div class="book-cover-column"><img class="detail-cover" src="{{ item.cover_url }}" alt="Cover of {{ item.title }}"></div>{% endif %}
+    <div class="book-summary">
+      <h2>{{ item.title }}</h2>
+      {% if item.author %}<p class="book-author">{{ item.author }}</p>{% endif %}
+      <div class="tag-list"><span>{{ 'The New York Times' if item.source == 'nytimes' else ('Open Library' if item.source == 'openlibrary' else 'Hardcover') }}</span>{% if item.published %}<span>{{ item.published }}</span>{% endif %}{% if item.isbn %}<span>ISBN {{ item.isbn }}</span>{% endif %}{% for genre in item.genres %}<span>{{ genre }}</span>{% endfor %}</div>
+      {% if book %}<p class="availability-banner available">Available</p>{% else %}<p class="availability-banner unavailable">Request book</p>{% endif %}
+      {% if item.author %}<p><a class="button" href="/discover/author?author={{ item.author|urlencode }}&return_to={{ detail_url|urlencode }}">More by this author</a></p>{% endif %}
+    </div>
+  </section>
+  {% if item.description %}<section class="book-description"><h3>Description</h3><p class="description">{{ item.description|plaintext }}</p></section>{% endif %}
+  <section class="book-actions card">
+    {% if book %}
+      <a class="button" href="/books/{{ book.id }}?return_to={{ return_to|urlencode }}&navigation={{ return_to|urlencode }}">View in library</a>
+      {% if user.kindle_email %}<form method="post" action="/books/{{ book.id }}/kindle"><input type="hidden" name="form_csrf" value="{{ csrf }}"><button>Send EPUB to Kindle</button></form>{% else %}<a class="button" href="/settings">Set Kindle address</a>{% endif %}
+    {% else %}
+      {% if wanted and wanted.status.value not in ['cancelled', 'failed'] %}
+        <span class="availability-banner unavailable">{{ wanted.status.value|replace('_', ' ')|title }}</span>
+        <form method="post" action="/wanted/{{ wanted.id }}/cancel">
+          <input type="hidden" name="form_csrf" value="{{ csrf }}"><input type="hidden" name="return_to" value="{{ detail_url }}">
+          <button class="secondary">Cancel request</button>
+        </form>
+      {% else %}
+        <form method="post" action="/wanted">
+          <input type="hidden" name="form_csrf" value="{{ csrf }}"><input type="hidden" name="source" value="{{ item.source }}"><input type="hidden" name="source_id" value="{{ item.source_id }}"><input type="hidden" name="title" value="{{ item.title }}"><input type="hidden" name="author" value="{{ item.author }}"><input type="hidden" name="isbn" value="{{ item.isbn }}"><input type="hidden" name="cover_url" value="{{ item.cover_url }}"><input type="hidden" name="return_to" value="{{ detail_url }}">
+          <button>Request download</button>
+        </form>
+      {% endif %}
+    {% endif %}
+  </section>
+</article>
+{% endblock %}

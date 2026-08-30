@@ -1,0 +1,11 @@
+{% extends "modern/base.html" %}
+{% block title %}API tokens · Digest{% endblock %}
+{% block content %}
+<h2>API tokens</h2>
+{% if error %}<p class="error">{{ error }}</p>{% endif %}
+{% if plain_token %}<section class="card"><h3>Copy this token now</h3><p>It cannot be shown again.</p><input value="{{ plain_token }}" readonly autocomplete="off"></section>{% endif %}
+<section class="card"><h3>Create token</h3><form method="post" action="/admin/tokens"><input type="hidden" name="form_csrf" value="{{ csrf }}"><label>Name<input name="name" required maxlength="100" placeholder="Kobo, OPDS client, or automation"></label><label>User<select name="user_id" required>{% for account in users %}<option value="{{ account.id }}">{{ account.username }}</option>{% endfor %}</select></label><button>Create token</button></form></section>
+<h3>Existing tokens</h3>
+{% for token in tokens %}<article class="card"><h4>{{ token.name }}</h4><p>User: {{ owners.get(token.user_id, 'Deleted user') }} · Created {{ token.created_at }} · {% if token.revoked_at %}Revoked {{ token.revoked_at }}{% else %}Active{% endif %}</p>{% if not token.revoked_at %}<form method="post" action="/admin/tokens/{{ token.id }}/revoke"><input type="hidden" name="form_csrf" value="{{ csrf }}"><button>Revoke</button></form>{% endif %}</article>{% else %}<p>No API tokens have been created.</p>{% endfor %}
+<h3>Using a token</h3><p>For OPDS Basic authentication, use the selected Digest username and token as the password.</p><pre>Authorization: Bearer dgt_…</pre>
+{% endblock %}

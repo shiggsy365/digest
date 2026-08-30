@@ -1,0 +1,9 @@
+{% extends "ereader/base.html" %}
+{% block title %}API tokens · Digest{% endblock %}
+{% block content %}
+<h2>API tokens</h2>
+{% if error %}<p class="error">{{ error }}</p>{% endif %}
+{% if plain_token %}<section class="panel"><h3>Copy this token now</h3><p>It cannot be shown again.</p><input value="{{ plain_token }}" readonly></section>{% endif %}
+<section class="panel"><h3>Create token</h3><form method="post" action="/admin/tokens"><input type="hidden" name="form_csrf" value="{{ csrf }}"><label>Name<input name="name" required maxlength="100"></label><label>User<select name="user_id" required>{% for account in users %}<option value="{{ account.id }}">{{ account.username }}</option>{% endfor %}</select></label><button>Create token</button></form></section>
+{% for token in tokens %}<section class="panel"><h3>{{ token.name }}</h3><p>User: {{ owners.get(token.user_id, 'Deleted user') }} · {% if token.revoked_at %}Revoked{% else %}Active{% endif %}</p>{% if not token.revoked_at %}<form method="post" action="/admin/tokens/{{ token.id }}/revoke"><input type="hidden" name="form_csrf" value="{{ csrf }}"><button>Revoke</button></form>{% endif %}</section>{% else %}<p>No API tokens have been created.</p>{% endfor %}
+{% endblock %}

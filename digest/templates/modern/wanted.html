@@ -1,0 +1,31 @@
+{% extends "modern/base.html" %}
+{% block title %}Downloads · Digest{% endblock %}
+{% block head_extra %}{% if refresh_pending %}<meta http-equiv="refresh" content="10">{% endif %}{% endblock %}
+{% block content %}
+<div class="section-heading"><div><h2>Downloads</h2><p class="muted">Wanted books and acquisition matches.</p></div></div>
+{% if items %}<div class="list-stack">{% for item in items %}
+<article class="card wanted-row">
+  <section class="wanted-summary">
+    {% if item.cover_url %}<img class="list-cover" src="{{ item.cover_url }}" alt="Cover of {{ item.title }}">{% endif %}
+    <div class="wanted-details">
+      <h3>{{ item.title }}</h3><p>{{ item.author }}</p>
+      <div class="tag-list"><span>{{ item.status.value|replace('_', ' ')|title }}</span><span>Attempts {{ item.attempts }}</span></div>
+      {% if item.last_error %}<p class="muted">{{ item.last_error }}</p>{% endif %}
+      <div class="wanted-actions">
+      {% if item.status.value == 'failed' %}<form method="post" action="/wanted/{{ item.id }}/retry"><input type="hidden" name="form_csrf" value="{{ csrf }}"><button>Choose another release</button></form>{% endif %}
+      {% if item.status.value in ['available', 'failed'] %}<form method="post" action="/wanted/{{ item.id }}/remove"><input type="hidden" name="form_csrf" value="{{ csrf }}"><button class="secondary">Remove</button></form>
+      {% elif item.status.value != 'importing' %}<form method="post" action="/wanted/{{ item.id }}/cancel"><input type="hidden" name="form_csrf" value="{{ csrf }}"><input type="hidden" name="return_to" value="/wanted"><button class="secondary">Cancel</button></form>{% endif %}
+      </div>
+    </div>
+  </section>
+  <section class="wanted-matches">
+    {% if not item.selected_release_id and releases.get(item.id) %}<h4>Matches</h4><ul class="release-results">{% for release in releases[item.id] %}
+      <li><form method="post" action="/wanted/{{ item.id }}/releases/{{ release.id }}"><input type="hidden" name="form_csrf" value="{{ csrf }}"><button>Download</button></form><span>{{ release.title }} - {{ release.format|upper }} - {{ (release.match_score * 100)|round|int }}% Match - <span class="provider-name provider-{{ release.adapter }}">{{ release.adapter|title }}</span></span></li>
+    {% endfor %}</ul>
+    {% elif not item.selected_release_id and (item.status.value == 'searching' or (item.status.value == 'wanted' and item.attempts == 0)) %}<p class="muted">Searching providers… This page refreshes every 10 seconds.</p>
+    {% elif not item.selected_release_id and item.status.value == 'wanted' and not item.last_error %}<p class="muted">No matches over 80% were found.</p>
+    {% elif item.selected_release_id %}<p class="muted">Release selected. {{ item.status.value|replace('_', ' ')|title }}.</p>{% endif %}
+  </section>
+</article>
+{% endfor %}</div>{% else %}<section class="card empty-state"><h3>No requested books</h3><p>Request a missing title from Discover and it will appear here.</p><a class="button" href="/discover">Open Discover</a></section>{% endif %}
+{% endblock %}

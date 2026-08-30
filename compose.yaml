@@ -1,0 +1,164 @@
+x-digest-app: &digest-app
+  image: ghcr.io/shiggsy365/digest:${DIGEST_VERSION:-latest}
+  environment: &digest-environment
+    DIGEST_SECRET_KEY: ${DIGEST_SECRET_KEY:?Set DIGEST_SECRET_KEY in .env}
+    DIGEST_DATABASE_URL: postgresql+psycopg://digest:${DIGEST_DB_PASSWORD:?Set DIGEST_DB_PASSWORD in .env}@digest-database:5432/digest
+    DIGEST_LIBRARY_ROOT: /library
+    DIGEST_DATA_ROOT: /data
+    DIGEST_PUBLIC_URL: ${DIGEST_PUBLIC_URL:-http://localhost:8000}
+    DIGEST_SCAN_INTERVAL_SECONDS: ${DIGEST_SCAN_INTERVAL_SECONDS:-60}
+    DIGEST_METADATA_REFRESH_HOURS: ${DIGEST_METADATA_REFRESH_HOURS:-168}
+    DIGEST_TIMEZONE: ${TZ:-Europe/London}
+  volumes:
+    - ${DIGEST_LIBRARY_PATH:-/mnt/books/library}:/library
+    - digest-data:/data
+  init: true
+  security_opt:
+    - no-new-privileges:true
+  cap_drop:
+    - ALL
+  tmpfs:
+    - /tmp
+
+services:
+  digest-database:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: digest
+      POSTGRES_USER: digest
+      POSTGRES_PASSWORD: ${DIGEST_DB_PASSWORD:?Set DIGEST_DB_PASSWORD in .env}
+    volumes:
+      - digest-database:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U digest -d digest"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+    labels:
+      - "traefik.enable=false"
+
+  digest-migrate:
+    <<: *digest-app
+    command: ["alembic", "upgrade", "head"]
+    restart: "no"
+    depends_on:
+      digest-database:
+        condition: service_healthy
+
+  digest-web:
+    <<: *digest-app
+    restart: unless-stopped
+    ports:
+      - "${DIGEST_BIND_ADDRESS:-127.0.0.1}:${DIGEST_PORT:-8000}:8000"
+    depends_on:
+      digest-migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/healthz', timeout=3)"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    labels:
+      - "traefik.enable=${DIGEST_TRAEFIK_ENABLED:-false}"
+      - "traefik.http.routers.digest.rule=Host(`${DIGEST_HOSTNAME:-digest.localhost}`)"
+      - "traefik.http.routers.digest.entrypoints=websecure"
+      - "traefik.http.routers.digest.tls=true"
+      - "traefik.http.routers.digest.tls.certresolver=letsencrypt"
+      - "traefik.http.services.digest.loadbalancer.server.port=8000"
+
+  digest-worker:
+    <<: *digest-app
+    command: ["python", "-m", "digest.worker"]
+    restart: unless-stopped
+    depends_on:
+      digest-migrate:
+        condition: service_completed_successfully
+    labels:
+      - "traefik.enable=false"
+
+  digest-shelfmark:
+    image: ghcr.io/calibrain/shelfmark:latest
+#    profiles: ["acquisition"]
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${SHELFMARK_PORT:-8084}:8084"
+    environment:
+      FLASK_PORT: "8084"
+      PUID: ${PUID}
+      PGID: ${PGID}
+      TZ: ${TZ:-Europe/London}
+      AA_BASE_URL: ${AA_BASE_URL:-}
+      AA_MIRROR_URLS: ${AA_MIRROR_URLS:-}
+      LIBGEN_MIRROR_URLS: ${LIBGEN_MIRROR_URLS:-}
+      ZLIB_MIRROR_URLS: ${ZLIB_MIRROR_URLS:-}
+      USING_TOR: ${USING_TOR:-false}
+    volumes:
+      - ${DIGEST_LIBRARY_PATH:-/mnt/books/library}:/books
+      - ${DIGEST_LIBRARY_PATH:-/mnt/books/library}:/downloads
+      - digest-shelfmark:/config
+    healthcheck:
+      test: ["CMD", "python", "-c", "import socket; socket.create_connection(('127.0.0.1', 8084), 3).close()"]
+      interval: 15s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+    labels:
+      - "traefik.enable=false"
+
+  digest-prowlarr:
+    image: lscr.io/linuxserver/prowlarr:latest
+#    profiles: ["usenet"]
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${PROWLARR_PORT:-9696}:9696"
+    environment:
+      PUID: ${PUID}
+      PGID: ${PGID}
+      TZ: ${TZ:-Europe/London}
+    volumes:
+      - digest-prowlarr:/config
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:9696/ping >/dev/null || wget -q --spider http://127.0.0.1:9696/ping"]
+      interval: 30s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    labels:
+      - "traefik.enable=false"
+
+  digest-sabnzbd:
+    image: lscr.io/linuxserver/sabnzbd:latest
+#    profiles: ["usenet"]
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${SABNZBD_PORT:-8080}:8080"
+    environment:
+      PUID: ${PUID}
+      PGID: ${PGID}
+      TZ: ${TZ:-Europe/London}
+    volumes:
+      - digest-sabnzbd:/config
+      - ${DIGEST_INCOMPLETE_PATH:-/mnt/books/incomplete}:/incomplete-downloads
+      - ${DIGEST_LIBRARY_PATH:-/mnt/books/library}:/downloads
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8080/ >/dev/null || wget -q --spider http://127.0.0.1:8080/"]
+      interval: 30s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    labels:
+      - "traefik.enable=false"
+
+volumes:
+  digest-data:
+  digest-database:
+  digest-shelfmark:
+  digest-prowlarr:
+  digest-sabnzbd:
+
+networks:
+  default:
+    name: ${DOCKER_NETWORK:-aio_network}
+    external: ${DOCKER_NETWORK_EXTERNAL:-true}

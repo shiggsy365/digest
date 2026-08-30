@@ -1,0 +1,3 @@
+Digest database migrations.
+
+Run `alembic upgrade head` before starting the web or worker service.

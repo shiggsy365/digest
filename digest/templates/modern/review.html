@@ -1,0 +1,10 @@
+{% extends "modern/base.html" %}
+{% block content %}
+<h2>Metadata review</h2>
+<form method="post" action="/admin/scan"><input type="hidden" name="form_csrf" value="{{ csrf }}"><button>Scan now</button></form>
+<form method="post" action="/review/bulk">
+  <input type="hidden" name="form_csrf" value="{{ csrf }}">
+  <p><button name="action" value="approve">Approve selected embedded metadata</button> <button name="action" value="refresh">Refresh selected</button></p>
+  <div class="grid">{% for book in books %}<article class="card"><label><input class="checkbox" type="checkbox" name="book_ids" value="{{ book.id }}"> Select</label><h3><a href="/review/{{ book.id }}">{{ book.title }}</a></h3><p>{{ book.primary_author }}</p><p class="{{ 'rejected' if book.review_state.value == 'rejected' else 'muted' }}">{{ book.review_state.value }}: {{ book.review_reason }}</p></article>{% else %}<p>Nothing needs review.</p>{% endfor %}</div>
+</form>
+{% endblock %}

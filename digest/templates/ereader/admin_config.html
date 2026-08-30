@@ -1,0 +1,37 @@
+{% extends "ereader/base.html" %}
+{% block title %}Administration · Digest{% endblock %}
+{% block content %}
+<h2>Metadata and SMTP</h2>
+{% if error %}<p class="error">{{ error }}</p>{% endif %}
+<form method="post" action="/admin/config">
+  <input type="hidden" name="form_csrf" value="{{ csrf }}">
+  <section class="panel">
+    <h3>Metadata</h3>
+    <label>Provider order<input name="metadata_provider_order" value="{{ provider_order }}" required></label>
+    <label>Automatic-match threshold<input name="auto_match_threshold" type="number" min="0.80" max="1" step="0.01" value="{{ config.get('auto_match_threshold', '0.94') }}" required></label>
+    <label>Refresh interval (hours)<input name="metadata_refresh_hours" type="number" min="1" max="8760" value="{{ config.get('metadata_refresh_hours', '168') }}" required></label>
+    <label>Discovery refresh interval (hours)<input name="discovery_refresh_hours" type="number" min="6" max="8760" value="{{ config.get('discovery_refresh_hours', '24') }}" required></label>
+    <label>Default language<input name="default_language" value="{{ config.get('default_language', 'en') }}" required></label>
+    <label>Author aliases<textarea name="author_aliases">{{ aliases.author_aliases }}</textarea></label>
+    <label>Series aliases<textarea name="series_aliases">{{ aliases.series_aliases }}</textarea></label>
+  </section>
+  <section class="panel"><h3>Acquisition</h3><label><input type="checkbox" name="shelfmark_enabled"{% if config.get('shelfmark_enabled') == 'true' %} checked{% endif %}> Enable Shelfmark searches</label><label>Shelfmark URL<input name="shelfmark_url" value="{{ config.get('shelfmark_url', 'http://shelfmark:8084') }}"></label><label><input type="checkbox" name="usenet_enabled"{% if config.get('usenet_enabled') == 'true' %} checked{% endif %}> Enable Usenet</label><label>Prowlarr URL<input name="prowlarr_url" value="{{ config.get('prowlarr_url', 'http://prowlarr:9696') }}"></label><label>Prowlarr API key<input name="prowlarr_api_key" type="password"></label><label>SABnzbd URL<input name="sabnzbd_url" value="{{ config.get('sabnzbd_url', 'http://sabnzbd:8080') }}"></label><label>SABnzbd API key<input name="sabnzbd_api_key" type="password"></label><label>SABnzbd category<input name="sabnzbd_category" value="{{ config.get('sabnzbd_category', 'ebooks') }}"></label></section>
+  <section class="panel">
+    <h3>Provider keys</h3>
+    <label>Hardcover key{% if secret_configured.hardcover_api_key %} (configured){% endif %}<input name="hardcover_api_key" type="password"></label>
+    <label>Google Books key{% if secret_configured.google_books_api_key %} (configured){% endif %}<input name="google_books_api_key" type="password"></label>
+    <label>ISBNdb key{% if secret_configured.isbndb_api_key %} (configured){% endif %}<input name="isbndb_api_key" type="password"></label>
+    <label>NYT Books key{% if secret_configured.nytimes_api_key %} (configured){% endif %}<input name="nytimes_api_key" type="password"></label>
+  </section>
+  <section class="panel">
+    <h3>SMTP</h3>
+    <label>Host<input name="smtp_host" value="{{ config.get('smtp_host', '') }}"></label>
+    <label>Port<input name="smtp_port" type="number" value="{{ config.get('smtp_port', '587') }}" required></label>
+    <label>Username<input name="smtp_user" value="{{ config.get('smtp_user', '') }}"></label>
+    <label>Password{% if secret_configured.smtp_password %} (configured){% endif %}<input name="smtp_password" type="password"></label>
+    <label><input type="checkbox" name="smtp_starttls"{% if config.get('smtp_starttls', 'true') == 'true' %} checked{% endif %}> Use STARTTLS</label>
+  </section>
+  <button>Save configuration</button>
+</form>
+<section class="panel"><h3>Discovery cache</h3><form method="post" action="/admin/discovery/refresh"><input type="hidden" name="form_csrf" value="{{ csrf }}"><button>Refresh discovery</button></form></section>
+{% endblock %}

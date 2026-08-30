@@ -1,0 +1,14 @@
+{% extends "modern/base.html" %}
+{% block content %}
+<div class="section-heading"><h2>Shelves</h2><a href="/">Back to library</a></div>
+<form method="post" action="/shelves" class="card shelf-create">
+  <input type="hidden" name="form_csrf" value="{{ csrf }}">
+  <label>Shelf name<input name="name" maxlength="160" required></label>
+  {% if user.role.value == 'admin' %}<label class="checkbox"><input type="checkbox" name="shared" value="true"> Shared with everyone</label>{% endif %}
+  <button>Create shelf</button>
+</form>
+<div class="browse-directory shelf-directory">
+  <article class="card browse-card"><a href="/?view=all"><strong>All Books</strong></a><span class="muted">{{ all_books_count }} book{% if all_books_count != 1 %}s{% endif %} · Default</span></article>
+  {% for shelf in shelves %}<article class="card browse-card"><a href="/shelves/{{ shelf.id }}"><strong>{{ shelf.name }}</strong></a><span class="muted">{{ counts[shelf.id] }} book{% if counts[shelf.id] != 1 %}s{% endif %} · {{ 'Shared' if shelf.shared else 'Private' }}</span>{% if (shelf.owner_id == user.id) or user.role.value == 'admin' %}<form method="post" action="/shelves/{{ shelf.id }}/delete" onsubmit="return confirm('Delete this shelf? Books will not be deleted.')"><input type="hidden" name="form_csrf" value="{{ csrf }}"><button class="danger">Delete shelf</button></form>{% endif %}</article>{% else %}<p>No shelves yet.</p>{% endfor %}
+</div>
+{% endblock %}

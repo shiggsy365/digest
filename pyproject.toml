@@ -1,0 +1,40 @@
+[build-system]
+requires = ["setuptools>=75"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "digest-library"
+version = "1.0.0"
+description = "Self-hosted ebook library, metadata, discovery, and device delivery"
+requires-python = ">=3.12"
+dependencies = [
+  "fastapi>=0.115,<1",
+  "uvicorn[standard]>=0.34,<1",
+  "gunicorn>=23,<24",
+  "jinja2>=3.1,<4",
+  "sqlalchemy>=2.0,<3",
+  "alembic>=1.14,<2",
+  "psycopg[binary]>=3.2,<4",
+  "pydantic-settings>=2.7,<3",
+  "python-multipart>=0.0.20,<1",
+  "pwdlib[argon2]>=0.2,<1",
+  "itsdangerous>=2.2,<3",
+  "httpx>=0.28,<1",
+  "ebooklib>=0.18,<1",
+  "pillow>=11,<12",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.3,<9", "ruff>=0.9,<1"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+
+[tool.setuptools.packages.find]
+include = ["digest*"]
+
+[tool.setuptools.package-data]
+digest = ["static/*", "templates/**/*.html"]

@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#111315">
+  <link rel="manifest" href="/static/manifest.webmanifest"><link rel="stylesheet" href="/static/app.css?v=20260830-1">
+  {% block head_extra %}{% endblock %}
+  <title>{% block title %}Digest{% endblock %}</title>
+</head>
+<body class="{% if user %}app-authenticated{% else %}app-public{% endif %}">
+<div class="{% if user %}app-shell{% else %}public-shell{% endif %}">
+  {% if user %}
+  <aside class="app-sidebar">
+    <a class="brand" href="/"><span class="brand-mark">D</span><span>Digest</span></a>
+    <nav class="side-nav" aria-label="Main navigation">
+      <span class="nav-label">Home</span>
+      <a class="{% if request.url.path == '/' and not request.query_params %}active{% endif %}" href="/"><span>⌂</span> Dashboard</a>
+      <a class="{% if request.url.path == '/' and request.query_params.get('view') == 'all' %}active{% endif %}" href="/?view=all"><span>▦</span> All books <b data-nav-count="books"></b></a>
+      <a class="{% if request.url.path.startswith('/discover') %}active{% endif %}" href="/discover"><span>✦</span> Discover</a>
+      <a class="{% if request.url.path.startswith('/wanted') %}active{% endif %}" href="/wanted"><span>⇩</span> Downloads <b data-nav-count="downloads"></b></a>
+      <span class="nav-label">Library</span>
+      <a class="{% if request.query_params.get('view') == 'authors' %}active{% endif %}" href="/?view=authors"><span>♙</span> Authors <b data-nav-count="authors"></b></a>
+      <a class="{% if request.query_params.get('view') == 'series' %}active{% endif %}" href="/?view=series"><span>☷</span> Series <b data-nav-count="series"></b></a>
+      <a class="{% if request.query_params.get('view') == 'reading' %}active{% endif %}" href="/?view=reading"><span>◉</span> Currently reading <b data-nav-count="reading"></b></a>
+      <span class="nav-label">Shelves</span>
+      <a class="{% if request.url.path.startswith('/shelves') %}active{% endif %}" href="/shelves"><span>◇</span> My shelves</a>
+      <div class="sidebar-shelves" data-sidebar-shelves></div>
+      <a class="{% if request.query_params.get('view') == 'favourites' %}active{% endif %}" href="/?view=favourites"><span>♡</span> Favourites <b data-nav-count="favourites"></b></a>
+      {% if user.role.value == 'admin' %}<span class="nav-label">Manage</span><a class="{% if request.url.path.startswith('/review') %}active{% endif %}" href="/review"><span>✓</span> Metadata review <b data-nav-count="review"></b></a>{% endif %}
+    </nav>
+  </aside>
+  <div class="app-frame">
+    <header class="topbar">
+      <a class="mobile-brand" href="/">Digest</a>
+      {% set discover_search = request.url.path.startswith('/discover') %}<form method="get" action="{{ '/discover' if discover_search else '/' }}" class="global-search"><span>⌕</span><input name="q" value="{{ q|default('') }}" placeholder="{{ 'Search discovery by title or author' if discover_search else 'Search books by title, author or series' }}" aria-label="{{ 'Search discovery' if discover_search else 'Search library' }}"></form>
+      <nav class="top-actions" aria-label="Account navigation">
+        <button type="button" data-sidebar-toggle aria-label="Collapse sidebar" title="Collapse sidebar">☰</button>
+        <a href="/settings" aria-label="Settings" title="Settings">⚙</a>
+        <form method="post" action="/logout"><input type="hidden" name="form_csrf" value="{{ csrf }}"><button aria-label="Log out" title="Log out">↪</button></form>
+      </nav>
+    </header>
+    <main class="app-content">
+  {% else %}
+    <div class="public-frame"><header class="public-header"><h1><a href="/">Digest</a></h1></header><main class="public-content">
+  {% endif %}
+      {% block content %}{% endblock %}
+    </main>
+    {% if user %}<nav class="mobile-tabs" aria-label="Mobile navigation"><a href="/">Library</a><a href="/discover">Discover</a><a href="/wanted">Downloads</a><a href="/shelves">Shelves</a><a href="/settings">Settings</a></nav>{% endif %}
+  </div></div>
+{% if user %}<div class="toast-region" aria-live="polite"></div><script src="/static/app.js?v=20260830-1" defer></script>{% endif %}
+</body>
+</html>
