@@ -63,6 +63,7 @@ from .kobo import (
     shelf_for_tag,
     shelf_tag_id,
     sync_payload,
+    sync_pending,
     update_tag,
 )
 from .kobo import (
@@ -2074,7 +2075,10 @@ def kobo_auth(
 @app.get("/kobo/{token}/v1/library/sync")
 def kobo_sync(token: str, request: Request, db: Annotated[Session, Depends(get_db)]):
     user = kobo_user(db, token)
-    return JSONResponse(sync_payload(db, user, settings.public_url.rstrip("/"), token))
+    response = JSONResponse(sync_payload(db, user, settings.public_url.rstrip("/"), token))
+    if sync_pending(db, user):
+        response.headers["x-kobo-sync"] = "continue"
+    return response
 
 
 @app.get("/kobo/{token}/v1/library/{book_id}/metadata")
@@ -2202,11 +2206,19 @@ def kobo_remove_collection_items(
 
 
 @app.get("/kobo/{token}/download/{book_id}")
-def kobo_download(token: str, book_id: str, db: Annotated[Session, Depends(get_db)]):
+@app.get("/kobo/{token}/download/{book_id}/{book_format}")
+def kobo_download(
+    token: str,
+    book_id: str,
+    db: Annotated[Session, Depends(get_db)],
+    book_format: str = "",
+):
     user = kobo_user(db, token)
     item = preferred_file(kobo_shelf_book(db, user, book_id))
     if not item:
         raise HTTPException(404, "No Kobo-compatible file")
+    if book_format and book_format.casefold() != item.format.casefold():
+        raise HTTPException(404, "Kobo file format not found")
     return FileResponse(item.path, filename=Path(item.path).name, media_type="application/epub+zip")
 
 

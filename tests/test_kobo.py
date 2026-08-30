@@ -20,6 +20,7 @@ from digest.kobo import (
     shelf_books,
     shelf_tag_id,
     sync_payload,
+    sync_pending,
     update_reading_state,
     update_tag,
 )
@@ -148,6 +149,9 @@ def test_sync_contains_only_compatible_books_on_selected_shelf(tmp_path: Path) -
         assert payload["BookMetadata"]["Title"] == "Bee Speaker"
         assert payload["BookMetadata"]["Series"]["Number"] == 3
         assert payload["BookMetadata"]["DownloadUrls"][0]["Format"] == "KEPUB"
+        assert payload["BookMetadata"]["DownloadUrls"][0]["Url"].endswith(
+            f"/download/{included.id}/kepub"
+        )
         assert payload["ReadingState"]["StatusInfo"]["Status"] == "ReadyToRead"
         assert excluded.id not in json.dumps(result)
         assert sync_payload(db, user, "https://digest.example", "secret") == []
@@ -209,6 +213,7 @@ def test_large_backlog_is_spread_across_multiple_syncs(tmp_path: Path) -> None:
         first = sync_payload(db, user, "https://digest.example", "secret")
         assert len(first) == 50
         assert db.query(KoboSyncedBook).count() == 50
+        assert sync_pending(db, user) is True
 
         second = sync_payload(db, user, "https://digest.example", "secret")
         assert len(second) == 50
@@ -217,6 +222,7 @@ def test_large_backlog_is_spread_across_multiple_syncs(tmp_path: Path) -> None:
         third = sync_payload(db, user, "https://digest.example", "secret")
         assert len(third) == book_count - 100
         assert db.query(KoboSyncedBook).count() == book_count
+        assert sync_pending(db, user) is False
 
         assert sync_payload(db, user, "https://digest.example", "secret") == []
 

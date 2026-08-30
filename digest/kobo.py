@@ -153,7 +153,7 @@ def metadata(book: Book, base_url: str, token: str) -> dict:
             {
                 "Format": book_format,
                 "Size": item.size_bytes,
-                "Url": f"{base_url}/kobo/{token}/download/{book.id}",
+                "Url": f"{base_url}/kobo/{token}/download/{book.id}/{item.format}",
                 "Platform": "Generic",
             }
             for book_format in kobo_formats
@@ -622,6 +622,27 @@ def sync_payload(db: Session, user: User, base_url: str, token: str) -> list[dic
     sync_tags(db, user, delivered_book_ids, results)
     db.commit()
     return results
+
+
+def sync_pending(db: Session, user: User) -> bool:
+    """Return whether the device needs another batched library sync request."""
+    books = {book.id: book for book in shelf_books(db, user) if preferred_file(book)}
+    tracked = {
+        item.book_id: item
+        for item in db.scalars(
+            select(KoboSyncedBook).where(KoboSyncedBook.user_id == user.id)
+        ).all()
+    }
+    if set(tracked) - set(books):
+        return True
+    return any(
+        book.id not in tracked
+        or (
+            not tracked[book.id].archived
+            and tracked[book.id].book_revision != revision(book.updated_at)
+        )
+        for book in books.values()
+    )
 
 
 def initialization(base_url: str, token: str) -> dict:
