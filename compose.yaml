@@ -1,5 +1,6 @@
 x-digest-app: &digest-app
   image: ghcr.io/shiggsy365/digest:${DIGEST_VERSION:-latest}
+  user: "${PUID:-1000}:${PGID:-1000}"
   environment: &digest-environment
     DIGEST_SECRET_KEY: ${DIGEST_SECRET_KEY:?Set DIGEST_SECRET_KEY in .env}
     DIGEST_DATABASE_URL: postgresql+psycopg://digest:${DIGEST_DB_PASSWORD:?Set DIGEST_DB_PASSWORD in .env}@digest-database:5432/digest
