@@ -1,8 +1,13 @@
 """JSON API used by the flag-gated e-reader single-page client."""
 
 import json
+import mimetypes
 import secrets
+import smtplib
+from email.message import EmailMessage
+from pathlib import Path
 from typing import Annotated, Any
+from urllib.parse import parse_qs
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -17,6 +22,7 @@ from .discovery import (
     HARDCOVER_TRENDING_PERIODS,
     NYT_FALLBACK_LISTS,
     build_discovery,
+    find_library_book,
     hardcover_books,
     nyt_bestsellers,
     nyt_weekly_lists,
@@ -27,6 +33,7 @@ from .kobo import active_kobo_token
 from .metadata import settings_map
 from .models import (
     AcquisitionRelease,
+    AuditEvent,
     Book,
     KoboSyncedBook,
     KoboSyncedShelf,
@@ -67,6 +74,8 @@ def _book(book: Book, state: ReadingState | None = None) -> dict[str, Any]:
         "publication_date": book.publication_date,
         "page_count": book.page_count,
         "cover_url": f"/books/{book.id}/cover" if book.cover_path else None,
+        "in_library": True,
+        "library_book_id": book.id,
         "files": [
             {
                 "id": item.id,
@@ -103,6 +112,22 @@ def _external(item: Any) -> dict[str, Any]:
         "cover_url": item.cover_url,
         "published": item.publication_date,
     }
+
+
+def _mark_owned(db: Session, items: list[Any]) -> list[dict[str, Any]]:
+    results = []
+    for raw in items:
+        item = _external(raw)
+        authors = item.get("authors") or []
+        author = item.get("author") or (authors[0] if authors else "")
+        owned = find_library_book(
+            db, title=str(item.get("title", "")), author=str(author),
+            isbn=str(item.get("isbn", ""))
+        )
+        item["in_library"] = owned is not None
+        item["library_book_id"] = owned.id if owned else None
+        results.append(item)
+    return results
 
 
 def _accessible_shelves(db: Session, user: User) -> list[Shelf]:
@@ -192,9 +217,35 @@ def book_detail(book_id: str, request: Request, db: Db, navigation: str = ""):
     state = db.scalar(select(ReadingState).where(ReadingState.user_id == user.id,
                                                  ReadingState.book_id == book.id))
     shelf_ids = list(db.scalars(select(ShelfBook.shelf_id).where(ShelfBook.book_id == book.id)))
-    ordered = list(db.scalars(_book_query(user, view="all", q=navigation, author="", series="",
-                                          metadata="").with_only_columns(Book.id)
-                              .order_by(func.lower(Book.title), Book.id)))
+    if navigation.startswith("shelf:"):
+        try:
+            shelf_id = int(navigation.removeprefix("shelf:"))
+        except ValueError:
+            shelf_id = 0
+        ordered_query = (select(Book.id).join(ShelfBook, ShelfBook.book_id == Book.id)
+                         .where(ShelfBook.shelf_id == shelf_id,
+                                Book.review_state == ReviewState.READY)
+                         .order_by(func.lower(Book.title), Book.id))
+    else:
+        params = parse_qs(navigation.partition("?")[2])
+
+        def value(key: str, default: str = "") -> str:
+            return params.get(key, [default])[0]
+
+        view = value("view", "all")
+        ordered_query = _book_query(
+            user, view=view, q=value("q"), author=value("author"),
+            series=value("series"), metadata=value("metadata")
+        ).with_only_columns(Book.id)
+        sort = value("sort") or ("added" if view == "latest" or value("q") else "title")
+        direction = value("direction") or ("desc" if sort in {"added", "release_date"} else "asc")
+        columns = {"title": func.lower(Book.sort_title), "author": func.lower(Book.primary_author),
+                   "release_date": Book.publication_date, "series": func.lower(Book.series),
+                   "added": Book.created_at}
+        order = columns.get(sort, columns["title"])
+        order = order.desc() if direction == "desc" else order.asc()
+        ordered_query = ordered_query.order_by(order, func.lower(Book.title), Book.id)
+    ordered = list(db.scalars(ordered_query))
     pos = ordered.index(book.id) if book.id in ordered else -1
     data = _book(book, state)
     data.update({"previous_id": ordered[pos - 1] if pos > 0 else None,
@@ -203,6 +254,50 @@ def book_detail(book_id: str, request: Request, db: Db, navigation: str = ""):
                  "shelves": [{"id": item.id, "name": item.name}
                              for item in _accessible_shelves(db, user)]})
     return data
+
+
+@router.post("/books/{book_id}/kindle")
+def kindle_book(book_id: str, request: Request, db: Db):
+    user = _user(request, db)
+    _csrf(request)
+    book = db.get(Book, book_id)
+    config = settings_map(db)
+    if not book or not book.files or not user.kindle_email:
+        raise HTTPException(400, "A book file and Kindle address are required")
+    item = next((value for value in book.files if value.format == "epub"), None)
+    if item is None:
+        raise HTTPException(409, "Send to Kindle requires an EPUB edition")
+    settings = get_settings()
+    if item.size_bytes > settings.max_kindle_attachment_mb * 1024 * 1024:
+        raise HTTPException(413, "Book exceeds the configured mail attachment limit")
+    required = [config.get(key) for key in ("smtp_host", "smtp_user", "smtp_password")]
+    if not all(required):
+        raise HTTPException(503, "SMTP is not configured")
+    message = EmailMessage()
+    message["From"], message["To"], message["Subject"] = (
+        config["smtp_user"], user.kindle_email, "Digest delivery"
+    )
+    message.set_content("Sent from Digest.")
+    path = Path(item.path)
+    mime = mimetypes.guess_type(path.name)[0] or "application/epub+zip"
+    maintype, subtype = mime.split("/", 1)
+    message.add_attachment(path.read_bytes(), maintype=maintype, subtype=subtype, filename=path.name)
+    try:
+        with smtplib.SMTP(config["smtp_host"], int(config.get("smtp_port", "587")),
+                          timeout=30) as smtp:
+            if config.get("smtp_starttls", "true") == "true":
+                smtp.starttls()
+            smtp.login(config["smtp_user"], config["smtp_password"])
+            smtp.send_message(message)
+    except Exception as exc:
+        db.add(AuditEvent(level="error", event="kindle_error", user_id=user.id,
+                          message=f"{type(exc).__name__}: {exc}"))
+        db.commit()
+        raise HTTPException(502, "Kindle delivery failed") from exc
+    db.add(AuditEvent(event="kindle_sent", user_id=user.id,
+                      message=f"Sent {book.title} to Kindle"))
+    db.commit()
+    return {"ok": True}
 
 
 @router.put("/books/{book_id}/reading-state")
@@ -248,27 +343,55 @@ def trending(request: Request, db: Db, period: str = "now", genre: str = ""):
     config = settings_map(db)
     if config.get("hardcover_api_key"):
         _, days = HARDCOVER_TRENDING_PERIODS.get(period, HARDCOVER_TRENDING_PERIODS["now"])
-        return {"items": hardcover_books(config["hardcover_api_key"], days=days, genre=genre)}
-    return {"items": [_external(item) for item in build_discovery(db, _user(request, db).id).trending]}
+        return {"items": _mark_owned(
+            db, hardcover_books(config["hardcover_api_key"], days=days, genre=genre)
+        )}
+    return {"items": _mark_owned(db, list(build_discovery(db, _user(request, db).id).trending))}
 
 
 @router.get("/discover/new-releases")
-def new_releases(request: Request, db: Db): return _discovery_group(request, db, "new_releases")
+def new_releases(request: Request, db: Db, genre: str = ""):
+    user = _user(request, db)
+    config = settings_map(db)
+    if config.get("hardcover_api_key"):
+        books = hardcover_books(config["hardcover_api_key"], days=120, genre=genre,
+                                 new_releases=True)
+        return {"items": _mark_owned(db, books)}
+    return {"items": [_book(item) for item in build_discovery(db, user.id).new_releases]}
 
 
 @router.get("/discover/genre")
 def genre(request: Request, db: Db, genre: str = "fantasy"):
     user = _user(request, db)
     key = genre if genre in GENRES else "fantasy"
+    config = settings_map(db)
+    if config.get("hardcover_api_key"):
+        return {"genre": key, "genres": GENRES, "items": _mark_owned(
+            db, hardcover_books(config["hardcover_api_key"], days=None, genre=GENRES[key])
+        )}
     result = build_discovery(db, user.id, genre=key)
-    return {"genre": key, "genres": GENRES, "items": [_external(item) for item in result.genre_items]}
+    return {"genre": key, "genres": GENRES, "items": _mark_owned(db, list(result.genre_items))}
 
 
 @router.get("/discover/search")
 def discover_search(request: Request, db: Db, q: str = ""):
     _user(request, db); config = settings_map(db)
-    return {"items": search_discovery_books(q, hardcover_api_key=config.get("hardcover_api_key", ""),
-                                               language=config.get("default_language", "en"))}
+    return {"items": _mark_owned(db, search_discovery_books(
+        q, hardcover_api_key=config.get("hardcover_api_key", ""),
+        language=config.get("default_language", "en")
+    ))}
+
+
+@router.get("/discover/book")
+def discover_book(request: Request, db: Db, source: str = "", source_id: str = "",
+                  title: str = "", author: str = "", isbn: str = "", cover_url: str = "",
+                  description: str = ""):
+    _user(request, db)
+    if source not in {"hardcover", "nytimes", "openlibrary"} or not title.strip():
+        raise HTTPException(400, "Invalid discovery book")
+    return _mark_owned(db, [{"source": source, "source_id": source_id, "title": title,
+                             "author": author, "isbn": isbn, "cover_url": cover_url,
+                             "description": description[:4000]}])[0]
 
 
 @router.get("/discover/bestsellers/lists")
@@ -295,7 +418,7 @@ def bestseller_weeks(request: Request, db: Db, slug: str):
 def bestsellers(request: Request, db: Db, slug: str, week: str = "current"):
     _user(request, db); key = settings_map(db).get("nytimes_api_key", "")
     if not key: return {"items": [], "configured": False}
-    return {"items": nyt_bestsellers(key, slug, week), "configured": True}
+    return {"items": _mark_owned(db, nyt_bestsellers(key, slug, week)), "configured": True}
 
 
 @router.get("/shelves")
@@ -334,10 +457,13 @@ def shelf(shelf_id: int, request: Request, db: Db, page: int = 1, page_size: int
     query = select(Book).join(ShelfBook).where(ShelfBook.shelf_id == shelf_id,
                                                 Book.review_state == ReviewState.READY)
     total = db.scalar(select(func.count()).select_from(query.subquery())) or 0
-    books = db.scalars(query.order_by(func.lower(Book.title)).offset((max(page, 1)-1)*page_size)
-                       .limit(min(page_size, 100))).all()
+    page = max(page, 1)
+    page_size = min(max(page_size, 1), 100)
+    books = db.scalars(query.order_by(func.lower(Book.title)).offset((page - 1) * page_size)
+                       .limit(page_size)).all()
     return {"shelf": {"id": found.id, "name": found.name, "shared": found.shared},
-            "items": [_book(item) for item in books], "page": max(page, 1), "total": total}
+            "items": [_book(item) for item in books], "page": page, "page_size": page_size,
+            "total": total, "has_more": page * page_size < total}
 
 
 @router.post("/shelves/{shelf_id}/books/{book_id}")
