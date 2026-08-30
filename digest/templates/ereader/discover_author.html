@@ -1,11 +1,7 @@
 {% extends "ereader/base.html" %}
 {% block title %}Books by {{ author }} · Digest{% endblock %}
-{% set page = (request.query_params.get('page', '1')|int) %}
-{% set page = page if page > 0 else 1 %}
-{% set page_size = 8 %}
 {% block content %}
 <p><a href="{{ return_to }}">← Back to book</a></p><h2>More by {{ author }}</h2>
 {% if provider_error %}<p class="error">{{ provider_error }}</p>{% endif %}
-{% if rows %}<div class="book-list">{% for row in rows[(page-1)*page_size : page*page_size] %}{% set item = row.item %}<article class="book-row">{% if item.cover_url %}<div class="book-cover"><img src="{{ item.cover_url }}" alt="" loading="lazy"></div>{% endif %}<div class="book-body"><h3><a href="{{ discovery_book_url(item, author_url) }}">{{ item.title }}</a></h3><p>{{ item.author }}{% if item.published_year %} · {{ item.published_year }}{% endif %}{% if row.available %} · Available{% endif %}</p></div></article>{% endfor %}</div>{% elif not provider_error %}<p>No bibliography results were found for this author.</p>{% endif %}
+{% if rows %}<div class="book-list js-paginated">{% for row in rows %}{% set item = row.item %}<article class="book-row">{% if item.cover_url %}<div class="book-cover"><img src="{{ item.cover_url }}" alt="" loading="lazy"></div>{% endif %}<div class="book-body"><h3><a href="{{ discovery_book_url(item, author_url) }}">{{ item.title }}</a></h3><p>{{ item.author }}{% if item.published_year %} · {{ item.published_year }}{% endif %}{% if row.available %} · Available{% endif %}</p></div></article>{% endfor %}</div>{% elif not provider_error %}<p>No bibliography results were found for this author.</p>{% endif %}
 {% endblock %}
-{% block pager %}{% if rows %}{% if page > 1 %}<a class="button" href="{{ author_url }}&page={{ page-1 }}">← Prev</a>{% endif %}<span class="page-indicator">Page {{ page }}</span>{% if rows|length > page*page_size %}<a class="button" href="{{ author_url }}&page={{ page+1 }}">Next →</a>{% endif %}{% endif %}{% endblock %}

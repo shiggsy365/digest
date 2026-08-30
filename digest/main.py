@@ -611,7 +611,7 @@ def library(
     selected_direction = (
         direction if direction in {"asc", "desc"} else default_sort_direction(selected_sort)
     )
-    page_size = 8 if is_ereader_request(request) else 24
+    page_size = 32 if is_ereader_request(request) else 24
     if filtered:
         result_count = db.scalar(select(func.count()).select_from(query.subquery())) or 0
         results = db.scalars(
@@ -689,7 +689,7 @@ def library(
         .group_by(Book.series)
         .order_by(func.lower(Book.series))
     )
-    directory_page_size = 8 if is_ereader_request(request) else 48
+    directory_page_size = 32 if is_ereader_request(request) else 48
     if directory_view == "authors":
         author_results = db.execute(
             author_query.offset((page - 1) * directory_page_size).limit(directory_page_size + 1)
@@ -1552,8 +1552,8 @@ def shelf_detail(
     page = max(page, 1)
     ordered_query = query.order_by(*book_order(selected_sort, selected_direction), Book.id)
     if is_ereader_request(request):
-        results = list(db.scalars(ordered_query.offset((page - 1) * 8).limit(9)))
-        books, has_next = results[:8], len(results) > 8
+        results = list(db.scalars(ordered_query.offset((page - 1) * 32).limit(33)))
+        books, has_next = results[:32], len(results) > 32
     else:
         books, has_next = list(db.scalars(ordered_query)), False
     return_to = f"/shelves/{shelf.id}?{urlencode({'sort': selected_sort, 'direction': selected_direction, 'metadata': metadata, 'page': page})}"
