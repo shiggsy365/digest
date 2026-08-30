@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#111315">
-  <link rel="manifest" href="/static/manifest.webmanifest"><link rel="stylesheet" href="/static/app.css?v=20260830-1">
+  <link rel="manifest" href="/static/manifest.webmanifest"><link rel="stylesheet" href="/static/app.css?v=20260830-2">
   {% block head_extra %}{% endblock %}
   <title>{% block title %}Digest{% endblock %}</title>
 </head>
@@ -25,7 +25,7 @@
       <a class="{% if request.url.path.startswith('/shelves') %}active{% endif %}" href="/shelves"><span>◇</span> My shelves</a>
       <div class="sidebar-shelves" data-sidebar-shelves></div>
       <a class="{% if request.query_params.get('view') == 'favourites' %}active{% endif %}" href="/?view=favourites"><span>♡</span> Favourites <b data-nav-count="favourites"></b></a>
-      {% if user.role.value == 'admin' %}<span class="nav-label">Manage</span><a class="{% if request.url.path.startswith('/review') %}active{% endif %}" href="/review"><span>✓</span> Metadata review <b data-nav-count="review"></b></a>{% endif %}
+      {% if user.role.value == 'admin' %}<span class="nav-label">Metadata</span><a class="{% if request.url.path == '/review' %}active{% endif %}" href="/review"><span>✓</span> Review <b data-nav-count="review"></b></a><a class="{% if request.url.path == '/review/grid' %}active{% endif %}" href="/review/grid"><span>☷</span> Grid editor</a>{% endif %}
     </nav>
   </aside>
   <div class="app-frame">

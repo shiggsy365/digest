@@ -24,6 +24,10 @@ input[type="checkbox"] { display: inline-block; width: auto; min-height: 0; }
 textarea { min-height: 9rem; }
 .book-grid { width: 100%; margin: 0 -.5%; font-size: 0; }
 .book-grid .book { display: inline-block; vertical-align: top; width: 24%; margin: 0 .5% 1.25rem; padding: 0; border: 0; font-size: 18px; }
+.directory-grid { width: 100%; margin: 0 -.5%; font-size: 0; }
+.directory-tile { display: inline-block; vertical-align: top; width: 24%; min-height: 6rem; margin: 0 .5% 1rem; padding: .7rem; border: 2px solid var(--line); font-size: 16px; text-decoration: none; }
+.directory-tile strong, .directory-tile span { display: block; }
+.directory-tile span { margin-top: .5rem; font-size: .8rem; }
 .book { border-bottom: 1px solid var(--line); padding: .8rem 0; }
 .book-grid .cover { width: 100%; max-width: none; }
 .cover { display: block; width: 10rem; max-width: 50%; height: auto; border: 1px solid var(--line); }

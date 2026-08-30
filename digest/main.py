@@ -1394,6 +1394,82 @@ def library_bulk(
     return RedirectResponse(f"{destination}{separator}bulk=queued", 303)
 
 
+@app.get("/review/grid", response_class=HTMLResponse)
+def metadata_grid(
+    request: Request,
+    db: Annotated[Session, Depends(get_db)],
+    q: str = "",
+    page: int = 1,
+):
+    user = require_admin(request, db)
+    page = max(page, 1)
+    query = select(Book).where(Book.review_state == ReviewState.READY)
+    if q.strip():
+        term = f"%{q.strip()}%"
+        query = query.where(
+            or_(Book.title.ilike(term), Book.primary_author.ilike(term), Book.series.ilike(term))
+        )
+    results = db.scalars(
+        query.order_by(func.lower(Book.primary_author), func.lower(Book.title))
+        .offset((page - 1) * 100)
+        .limit(101)
+    ).all()
+    return render(
+        request,
+        "metadata_grid.html",
+        {"books": results[:100], "q": q.strip(), "page": page, "has_next": len(results) > 100},
+        user,
+    )
+
+
+@app.post("/review/grid")
+def update_metadata_grid(
+    request: Request,
+    db: Annotated[Session, Depends(get_db)],
+    form_csrf: Annotated[str, Form()],
+    book_ids: Annotated[list[str], Form()],
+    titles: Annotated[list[str], Form()],
+    authors: Annotated[list[str], Form()],
+    series_values: Annotated[list[str], Form()],
+    series_numbers: Annotated[list[str], Form()],
+    return_to: Annotated[str | None, Form()] = None,
+):
+    require_admin(request, db)
+    check_csrf(request, form_csrf)
+    books = {book.id: book for book in db.scalars(select(Book).where(Book.id.in_(book_ids)))}
+    updates: list[tuple[Book, str, list[str], str | None, float | None]] = []
+    try:
+        rows = list(zip(book_ids, titles, authors, series_values, series_numbers, strict=True))
+        if not rows:
+            raise ValueError("No books were submitted.")
+        for book_id, title, author_value, series, number in rows:
+            book = books.get(book_id)
+            if not book:
+                raise ValueError("A selected book no longer exists.")
+            author_list = [value.strip() for value in author_value.split(",") if value.strip()]
+            if not title.strip() or not author_list:
+                raise ValueError("Every book must retain a title and at least one author.")
+            series_number = float(number) if number.strip() else None
+            updates.append((book, title.strip(), author_list, series.strip() or None, series_number))
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    for book, title, author_list, series, series_number in updates:
+        book.title = title
+        book.sort_title = title.casefold()
+        book.primary_author = author_list[0]
+        book.authors_json = json.dumps(author_list)
+        book.series = series
+        book.series_number = series_number
+        book.metadata_source = "manual"
+        book.match_confidence = 1
+    db.commit()
+    for book, *_ in updates:
+        organise_book(db, book)
+    destination = safe_return_to(return_to, "/review/grid")
+    separator = "&" if "?" in destination else "?"
+    return RedirectResponse(f"{destination}{separator}saved={len(updates)}", 303)
+
+
 @app.post("/shelves")
 def create_shelf(
     request: Request,

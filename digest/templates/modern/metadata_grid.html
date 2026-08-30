@@ -1,0 +1,19 @@
+{% extends "modern/base.html" %}
+{% block title %}Metadata grid · Digest{% endblock %}
+{% block content %}
+<section class="library-section">
+  <div class="section-heading"><h2>Metadata grid editor</h2><a href="/?view=all">Back to all books</a></div>
+  <p class="muted">Edit up to 100 books at once. Separate multiple authors with commas.</p>
+  {% if request.query_params.get('saved') %}<p class="success">Saved {{ request.query_params.get('saved') }} books.</p>{% endif %}
+  <form method="get" class="library-search"><input type="search" name="q" value="{{ q }}" placeholder="Filter by title, author or series"><button>Filter</button></form>
+  <form method="post">
+    <input type="hidden" name="form_csrf" value="{{ csrf }}"><input type="hidden" name="return_to" value="/review/grid?q={{ q|urlencode }}&page={{ page }}">
+    <div class="metadata-grid-wrap"><table class="metadata-grid"><thead><tr><th>Title</th><th>Authors</th><th>Series</th><th>Series number</th></tr></thead><tbody>
+    {% for book in books %}<tr><td><input type="hidden" name="book_ids" value="{{ book.id }}"><div class="metadata-grid-title">{% if book.cover_path %}<img class="metadata-grid-cover" src="/books/{{ book.id }}/cover?v={{ book.updated_at|coverversion }}" alt="">{% endif %}<input name="titles" value="{{ book.title }}" required aria-label="Title for {{ book.title }}"></div></td><td><input name="authors" value="{{ (book.authors_json|fromjson)|join(', ') or book.primary_author }}" required aria-label="Authors for {{ book.title }}"></td><td><input name="series_values" value="{{ book.series or '' }}" list="series-suggestions" aria-label="Series for {{ book.title }}"></td><td><input class="series-number" name="series_numbers" type="number" step="any" value="{{ book.series_number if book.series_number is not none else '' }}" aria-label="Series number for {{ book.title }}"></td></tr>{% else %}<tr><td colspan="4">No books matched.</td></tr>{% endfor %}
+    </tbody></table></div>
+    {% if books %}<div class="metadata-grid-actions"><span>{{ books|length }} book{% if books|length != 1 %}s{% endif %} on this page</span><button>Save metadata changes</button></div>{% endif %}
+  </form>
+  <datalist id="series-suggestions">{% for value in books|map(attribute='series')|select|unique %}<option value="{{ value }}">{% endfor %}</datalist>
+  {% if page > 1 or has_next %}<p>{% if page > 1 %}<a class="button" href="/review/grid?q={{ q|urlencode }}&page={{ page-1 }}">Previous</a>{% endif %}{% if has_next %}<a class="button" href="/review/grid?q={{ q|urlencode }}&page={{ page+1 }}">Next</a>{% endif %}</p>{% endif %}
+</section>
+{% endblock %}
