@@ -127,6 +127,23 @@ replaces the old templates.
   edited to drop the ereader branches, so this is the one place regressions
   could leak in.
 
+## Implemented contract
+
+The rollout flag is `DIGEST_EREADER_SPA` and defaults to disabled. When enabled,
+authenticated Kobo/Kindle requests receive `ereader/app.html`; login and setup
+remain conventional pages. The modern template family is unchanged.
+
+List endpoints use `page` (one-based) and `page_size` (maximum 100) and return
+`items`, `page`, `page_size`, `total`, and `has_more` where the collection is
+paginated. Mutations use the existing session cookie and require the shell's
+CSRF value in the `X-CSRF-Token` header. The API is rooted at `/api/ereader` and
+includes library/directories/detail, discovery, shelves, downloads, and profile
+and Kobo settings endpoints.
+
+Device validation and removal of the fallback templates remain rollout steps:
+enable the flag on staging, validate on real devices, then make the flag the
+deployment default before deleting the old implementation.
+
 ## Risks / open questions
 
 - **Two client renderers to maintain.** Modern already has its own

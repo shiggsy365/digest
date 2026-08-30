@@ -18,6 +18,7 @@ class Settings(BaseSettings):
     timezone: str = "Europe/London"
     session_days: int = 30
     max_kindle_attachment_mb: int = 25
+    ereader_spa: bool = False
 
     @field_validator("library_root", "data_root", mode="before")
     @classmethod

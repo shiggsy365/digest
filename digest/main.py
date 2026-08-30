@@ -19,7 +19,13 @@ from sqlalchemy.orm import Session
 from starlette.middleware.sessions import SessionMiddleware
 
 from .accounts import AccountError, create_account, reset_password, update_account
-from .acquisition import cancel_acquisition, create_wanted, find_wanted, queue_release, retry_acquisition
+from .acquisition import (
+    cancel_acquisition,
+    create_wanted,
+    find_wanted,
+    queue_release,
+    retry_acquisition,
+)
 from .admin_settings import PROVIDERS, SettingsError, save_admin_settings
 from .config import get_settings
 from .db import get_db, initialise_database
@@ -38,6 +44,7 @@ from .discovery import (
     nyt_weeks,
     search_discovery_books,
 )
+from .ereader_api import router as ereader_api_router
 from .jobs import enqueue
 from .kobo import (
     active_kobo_token,
@@ -102,6 +109,7 @@ from .tokens import TokenError, create_token, revoke_token
 
 settings = get_settings()
 app = FastAPI(title="Digest", version="0.1.0")
+app.include_router(ereader_api_router)
 app.add_middleware(
     SessionMiddleware,
     secret_key=settings.secret_key,
@@ -373,6 +381,12 @@ def is_ereader_request(request: Request) -> bool:
 
 
 def render(request: Request, name: str, context: dict, user: User | None = None) -> HTMLResponse:
+    if user is not None and is_ereader_request(request) and settings.ereader_spa:
+        return templates.TemplateResponse(
+            request,
+            "ereader/app.html",
+            {"user": user, "csrf": csrf(request)},
+        )
     family = "ereader" if is_ereader_request(request) else "modern"
     template = f"{family}/{name}"
     # The modern templates are also the safe fallback while an e-reader-specific
