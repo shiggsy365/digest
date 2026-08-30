@@ -32,11 +32,8 @@
   function api(path, done) { ajax('GET', '/api/ereader' + path, null, done); }
   function fail(error) { content.innerHTML = '<main><p class="error">' + esc(error) + '</p></main>'; }
   function moreByAuthor(author) {
-    var returnTo;
     if (!author) return '';
-    returnTo = location.pathname + location.search + location.hash;
-    return '<a href="/discover/author?author=' + encodeURIComponent(author) + '&return_to=' +
-      encodeURIComponent(returnTo) + '">More by this author</a>';
+    return '<a href="#author?author=' + encodeURIComponent(author) + '">More by this author</a>';
   }
   function row(book) {
     var cover = book.cover_url ? '<img src="' + esc(book.cover_url) + '" alt="">' : '';
@@ -168,6 +165,18 @@
       showBooks(titles[base] || 'Discover', data.items);
     });
   }
+  function authorBooks(author) {
+    state.discoveryListing = true;
+    state.serverPaging = false;
+    state.loader = null;
+    state.page = 1;
+    api('/discover/author?author=' + encodeURIComponent(author), function (error, data) {
+      if (error) return fail(error);
+      filters.innerHTML = '';
+      state.more = false;
+      showBooks('More by ' + data.author, data.items);
+    });
+  }
   function shelves() {
     state.serverPaging = false;
     state.loader = null;
@@ -291,6 +300,8 @@
       book(bookParts[0], decodeURIComponent(bookParts[1] || ''));
     }
     else if (hash.indexOf('discover-book?') === 0) discoveryBook(hash.substring(14));
+    else if (hash.indexOf('author?author=') === 0)
+      authorBooks(decodeURIComponent(hash.substring(14).replace(/\+/g, ' ')));
     else if (parts[0] === 'shelf') shelf(parts[1]); else library();
   }
   document.onclick = function (event) {

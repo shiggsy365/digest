@@ -3,7 +3,7 @@ from sqlalchemy.orm import Session
 from starlette.requests import Request
 
 from digest.db import Base
-from digest.ereader_api import authors, library, shelf
+from digest.ereader_api import authors, discover_author, library, shelf
 from digest.main import render, settings
 from digest.models import Book, ReviewState, Role, Shelf, ShelfBook, User
 from digest.security import hash_password
@@ -89,3 +89,26 @@ def test_shelf_api_paginates_every_book_in_six_row_batches() -> None:
         assert first["has_more"] is True
         assert len(second["items"]) == 1
         assert second["has_more"] is False
+
+
+def test_discovery_author_is_available_to_the_spa(monkeypatch) -> None:
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    with Session(engine, expire_on_commit=False) as db:
+        user = User(username="reader", password_hash=hash_password("long-test-password"),
+                    role=Role.USER)
+        db.add(user)
+        db.commit()
+        monkeypatch.setattr(
+            "digest.ereader_api.author_bibliography",
+            lambda author, **kwargs: [{
+                "source": "hardcover", "source_id": "1", "title": "Another Book",
+                "author": author, "authors": [author], "isbn": "", "cover_url": "",
+            }],
+        )
+
+        result = discover_author(request_for(user), db, author="Known Author")
+
+        assert result["author"] == "Known Author"
+        assert result["items"][0]["title"] == "Another Book"
+        assert result["items"][0]["in_library"] is False

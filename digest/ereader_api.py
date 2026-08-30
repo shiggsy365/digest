@@ -21,6 +21,7 @@ from .discovery import (
     GENRES,
     HARDCOVER_TRENDING_PERIODS,
     NYT_FALLBACK_LISTS,
+    author_bibliography,
     build_discovery,
     find_library_book,
     hardcover_books,
@@ -380,6 +381,24 @@ def discover_search(request: Request, db: Db, q: str = ""):
         q, hardcover_api_key=config.get("hardcover_api_key", ""),
         language=config.get("default_language", "en")
     ))}
+
+
+@router.get("/discover/author")
+def discover_author(request: Request, db: Db, author: str = ""):
+    _user(request, db)
+    author = author.strip()
+    if not author:
+        raise HTTPException(400, "Author is required")
+    config = settings_map(db)
+    try:
+        books = author_bibliography(
+            author,
+            hardcover_api_key=config.get("hardcover_api_key", ""),
+            language=config.get("default_language", "en"),
+        )
+    except (httpx.HTTPError, TypeError, ValueError) as exc:
+        raise HTTPException(502, str(exc) or "The discovery provider is unavailable") from exc
+    return {"author": author, "items": _mark_owned(db, books)}
 
 
 @router.get("/discover/book")
