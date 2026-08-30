@@ -47,6 +47,5 @@ textarea { min-height: 9rem; }
 .error, .rejected { font-weight: bold; }
 footer { clear: both; border-top: 2px solid var(--ink); padding: 1rem 0 2rem; }
 footer p { font-size: .8rem; }
-@media (max-width: 42rem) { .book-grid .book { width: 32.33%; } }
-@media (max-width: 30rem) { body { font-size: 17px; } .book-grid .book { width: 49%; } .main-nav a { width: 47%; text-align: center; } .book-hero, .book-hero > * { display: block; } .book-hero > div { padding-left: 0; } .book-hero .detail-cover { width: 9rem; margin: 0 auto 1rem; } }
+@media (max-width: 30rem) { body { font-size: 17px; } .main-nav a { width: 47%; text-align: center; } .book-hero, .book-hero > * { display: block; } .book-hero > div { padding-left: 0; } .book-hero .detail-cover { width: 9rem; margin: 0 auto 1rem; } }
 @media (prefers-color-scheme: dark) { :root { --paper: #111; --ink: #fff; --soft: #222; --line: #aaa; } .muted { color: #ccc; } }
