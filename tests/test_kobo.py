@@ -321,6 +321,17 @@ def test_device_archive_removes_owned_shelf_item_but_not_shared_item() -> None:
         assert db.query(KoboSyncedBook).filter_by(book_id=second.id).one().archived is True
 
 
+def test_device_archive_ignores_books_from_a_previous_sync_server() -> None:
+    with kobo_session() as db:
+        user = make_user(db)
+        user.kobo_sync_all_books = True
+        db.commit()
+
+        archive_from_device(db, user, "123")
+
+        assert db.query(KoboSyncedBook).count() == 0
+
+
 def test_kobo_collections_create_rename_and_remove_items() -> None:
     with kobo_session() as db:
         user = make_user(db)

@@ -168,7 +168,8 @@ def test_user_can_choose_one_accessible_kobo_sync_shelf() -> None:
 
         profile_settings(
             request_for(reader, "POST", "/settings/profile"), db,
-            kindle_email="", form_csrf="token", kobo_sync_shelf_id="all",
+            form_csrf="token", kobo_sync_shelf_id="all",
         )
         assert reader.kobo_sync_shelf_id is None
         assert reader.kobo_sync_all_books is True
+        assert reader.kindle_email is None

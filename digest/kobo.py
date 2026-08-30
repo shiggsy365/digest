@@ -401,10 +401,10 @@ def sync_tags(
 
 def archive_from_device(db: Session, user: User, book_id: str) -> None:
     if user.kobo_sync_shelf_id is None and not user.kobo_sync_all_books:
-        raise HTTPException(404, "No Kobo sync shelf configured")
+        return
     shelf = db.get(Shelf, user.kobo_sync_shelf_id) if user.kobo_sync_shelf_id else None
     if not shelf and not user.kobo_sync_all_books:
-        raise HTTPException(404, "Kobo sync shelf no longer exists")
+        return
     membership = db.scalar(
         select(ShelfBook).where(
             ShelfBook.shelf_id == shelf.id,
@@ -418,7 +418,10 @@ def archive_from_device(db: Session, user: User, book_id: str) -> None:
         )
     )
     if not membership and not tracked:
-        raise HTTPException(404, "Book is not synced to this Kobo")
+        # Kobo may still be cleaning up entitlements created by a previous
+        # sync server. DELETE is idempotent, so an unknown book is already in
+        # the requested state and must not abort the device's incremental sync.
+        return
     if membership and shelf and can_edit_shelf(user, shelf):
         db.delete(membership)
         if tracked:

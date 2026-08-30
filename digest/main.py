@@ -1954,13 +1954,13 @@ def settings_page(request: Request, db: Annotated[Session, Depends(get_db)]):
 def profile_settings(
     request: Request,
     db: Annotated[Session, Depends(get_db)],
-    kindle_email: Annotated[str, Form()],
     form_csrf: Annotated[str, Form()],
+    kindle_email: Annotated[str | None, Form()] = None,
     kobo_sync_shelf_id: Annotated[str | None, Form()] = None,
 ):
     user = require_user(request, db)
     check_csrf(request, form_csrf)
-    user.kindle_email = kindle_email.strip() or None
+    user.kindle_email = (kindle_email or "").strip() or None
     sync_all = kobo_sync_shelf_id == "all"
     try:
         shelf_id = int(kobo_sync_shelf_id) if kobo_sync_shelf_id and not sync_all else None
@@ -2109,7 +2109,14 @@ def kobo_update_collection(
     payload: Annotated[dict | None, Body()] = None,
 ):
     user = kobo_user(db, token)
-    shelf = shelf_for_tag(db, user, tag_id)
+    try:
+        shelf = shelf_for_tag(db, user, tag_id)
+    except HTTPException as exc:
+        if exc.status_code != 404:
+            raise
+        # Old sync servers leave collection operations queued on the device.
+        # Treat their unknown identifiers as already removed/unchanged.
+        return Response(status_code=204 if request.method == "DELETE" else 200)
     if request.method == "DELETE":
         delete_tag(db, user, shelf)
         return Response(status_code=204)
@@ -2129,7 +2136,13 @@ def kobo_add_collection_items(
 ):
     user = kobo_user(db, token)
     try:
-        add_tag_items(db, user, shelf_for_tag(db, user, tag_id), payload)
+        shelf = shelf_for_tag(db, user, tag_id)
+    except HTTPException as exc:
+        if exc.status_code == 404:
+            return Response(status_code=201)
+        raise
+    try:
+        add_tag_items(db, user, shelf, payload)
     except (TypeError, ValueError) as exc:
         raise HTTPException(400, str(exc)) from exc
     return Response(status_code=201)
@@ -2144,7 +2157,13 @@ def kobo_remove_collection_items(
 ):
     user = kobo_user(db, token)
     try:
-        remove_tag_items(db, user, shelf_for_tag(db, user, tag_id), payload)
+        shelf = shelf_for_tag(db, user, tag_id)
+    except HTTPException as exc:
+        if exc.status_code == 404:
+            return Response(status_code=200)
+        raise
+    try:
+        remove_tag_items(db, user, shelf, payload)
     except (TypeError, ValueError) as exc:
         raise HTTPException(400, str(exc)) from exc
     return Response(status_code=200)
