@@ -367,9 +367,13 @@ def accessible_shelves(db: Session, user: User) -> list[Shelf]:
     )
 
 
-def render(request: Request, name: str, context: dict, user: User | None = None) -> HTMLResponse:
+def is_ereader_request(request: Request) -> bool:
     user_agent = request.headers.get("user-agent", "").casefold()
-    family = "ereader" if "kindle" in user_agent or "kobo" in user_agent else "modern"
+    return "kindle" in user_agent or "kobo" in user_agent
+
+
+def render(request: Request, name: str, context: dict, user: User | None = None) -> HTMLResponse:
+    family = "ereader" if is_ereader_request(request) else "modern"
     template = f"{family}/{name}"
     # The modern templates are also the safe fallback while an e-reader-specific
     # version of a screen is not present.
@@ -602,15 +606,16 @@ def library(
     selected_direction = (
         direction if direction in {"asc", "desc"} else default_sort_direction(selected_sort)
     )
+    page_size = 8 if is_ereader_request(request) else 24
     if filtered:
         result_count = db.scalar(select(func.count()).select_from(query.subquery())) or 0
         results = db.scalars(
             query.order_by(*book_order(selected_sort, selected_direction))
-            .offset((page - 1) * 24)
-            .limit(25)
+            .offset((page - 1) * page_size)
+            .limit(page_size + 1)
         ).all()
-        books = results[:24]
-        has_next = len(results) > 24
+        books = results[:page_size]
+        has_next = len(results) > page_size
     else:
         result_count = 0
         books = db.scalars(query.order_by(Book.created_at.desc()).limit(12)).all()
@@ -679,16 +684,21 @@ def library(
         .group_by(Book.series)
         .order_by(func.lower(Book.series))
     )
+    directory_page_size = 8 if is_ereader_request(request) else 48
     if directory_view == "authors":
-        author_results = db.execute(author_query.offset((page - 1) * 48).limit(49)).all()
-        authors = author_results[:48]
+        author_results = db.execute(
+            author_query.offset((page - 1) * directory_page_size).limit(directory_page_size + 1)
+        ).all()
+        authors = author_results[:directory_page_size]
         series_rows = []
-        has_next = len(author_results) > 48
+        has_next = len(author_results) > directory_page_size
     elif directory_view == "series":
-        series_results = db.execute(series_query.offset((page - 1) * 48).limit(49)).all()
-        series_rows = series_results[:48]
+        series_results = db.execute(
+            series_query.offset((page - 1) * directory_page_size).limit(directory_page_size + 1)
+        ).all()
+        series_rows = series_results[:directory_page_size]
         authors = []
-        has_next = len(series_results) > 48
+        has_next = len(series_results) > directory_page_size
     else:
         authors = db.execute(author_query.limit(12)).all()
         series_rows = db.execute(series_query.limit(12)).all()
@@ -1506,6 +1516,7 @@ def shelf_detail(
     sort: str = "title",
     direction: str = "",
     metadata: str = "",
+    page: int = 1,
 ):
     user = require_user(request, db)
     shelf = db.get(Shelf, shelf_id)
@@ -1532,10 +1543,14 @@ def shelf_detail(
                 Book.description == "",
             )
         )
-    books = list(
-        db.scalars(query.order_by(*book_order(selected_sort, selected_direction), Book.id))
-    )
-    return_to = f"/shelves/{shelf.id}?{urlencode({'sort': selected_sort, 'direction': selected_direction, 'metadata': metadata})}"
+    page = max(page, 1)
+    ordered_query = query.order_by(*book_order(selected_sort, selected_direction), Book.id)
+    if is_ereader_request(request):
+        results = list(db.scalars(ordered_query.offset((page - 1) * 8).limit(9)))
+        books, has_next = results[:8], len(results) > 8
+    else:
+        books, has_next = list(db.scalars(ordered_query)), False
+    return_to = f"/shelves/{shelf.id}?{urlencode({'sort': selected_sort, 'direction': selected_direction, 'metadata': metadata, 'page': page})}"
     return render(
         request,
         "shelf.html",
@@ -1548,6 +1563,8 @@ def shelf_detail(
             "metadata_filter": metadata == "missing",
             "return_to": return_to,
             "can_manage": shelf.shared or shelf.owner_id == user.id,
+            "page": page,
+            "has_next": has_next,
         },
         user,
     )
