@@ -217,7 +217,11 @@ def author_bibliography(
         for candidate in candidates
         if wanted
         in {author_key(value) for value in candidate.authors}
-        and language_matches(candidate.language, language, allow_unknown=False)
+        and language_matches(
+            candidate.language,
+            language,
+            allow_unknown=isinstance(provider, HardcoverProvider),
+        )
     ]
     return _discovery_candidates(candidates)
 

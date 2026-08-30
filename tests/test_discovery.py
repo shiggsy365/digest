@@ -347,6 +347,45 @@ def test_author_bibliography_returns_up_to_100_and_ignores_initial_punctuation()
     assert results[-1]["title"] == "Book 99"
 
 
+def test_hardcover_author_bibliography_keeps_results_without_language() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "data": {
+                    "search": {
+                        "results": {
+                            "found": 2,
+                            "hits": [
+                                {
+                                    "document": {
+                                        "id": 1,
+                                        "title": "Children of Time",
+                                        "author_names": ["Adrian Tchaikovsky"],
+                                    }
+                                },
+                                {
+                                    "document": {
+                                        "id": 2,
+                                        "title": "Unrelated",
+                                        "author_names": ["Another Author"],
+                                    }
+                                },
+                            ],
+                        }
+                    }
+                }
+            },
+        )
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        results = author_bibliography(
+            "Adrian Tchaikovsky", hardcover_api_key="secret", language="en", client=client
+        )
+
+    assert [item["title"] for item in results] == ["Children of Time"]
+
+
 def test_author_page_marks_library_books_available(monkeypatch) -> None:
     engine = create_engine("sqlite:///:memory:")
     Base.metadata.create_all(engine)
