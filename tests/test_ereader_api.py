@@ -64,3 +64,4 @@ def test_flagged_ereader_render_uses_spa_shell() -> None:
         html = response.body.decode()
         assert 'id="spa-shell"' in html
         assert "/static/ereader-app.js" in html
+        assert '>Menu</button>' in html

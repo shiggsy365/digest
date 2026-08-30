@@ -1,6 +1,7 @@
 (function () {
   'use strict';
-  var state = {page: 1, pages: [], index: 0, more: false, query: ''};
+  var state = {page: 1, pages: [], index: 0, more: false, query: '', libraryExtra: '',
+    total: 0, pageSize: 40, pendingLast: false};
   var content = document.getElementById('spa-content');
   var filters = document.getElementById('spa-filters');
   var token = document.querySelector('meta[name="csrf-token"]').getAttribute('content');
@@ -36,10 +37,10 @@
       esc(book.source || 'openlibrary') + '" data-source-id="' + esc(book.source_id || '') +
       '" data-title="' + esc(book.title) + '" data-author="' + esc(author) +
       '" data-cover="' + esc(book.cover_url || '') + '">Request download</button></li>';
-    return '<li class="book-item">' + cover + '<a class="book-title" href="#book/' +
-      esc(book.id) + '">' + esc(book.title) + '</a><div>' + esc(author) + '</div>' +
-      (book.series ? '<div class="muted">' + esc(book.series) +
-      (book.series_number ? ' ' + esc(book.series_number) : '') + '</div>' : '') + '</li>';
+    return '<article class="book-row">' + (cover ? '<div class="book-cover">' + cover + '</div>' : '') +
+      '<div class="book-body"><h3><a href="#book/' + esc(book.id) + '">' + esc(book.title) +
+      '</a></h3><p>' + esc(author) + (book.series ? ' &middot; ' + esc(book.series) +
+      (book.series_number ? ' #' + esc(book.series_number) : '') : '') + '</p></div></article>';
   }
   function renderPage() {
     var list = content.querySelector('[data-paginate]');
@@ -61,37 +62,54 @@
       for (i = 0; i < list.children.length; i += size)
         state.pages.push([i, Math.min(i + size, list.children.length)]);
     }
+    if (state.pendingLast && state.pages.length) {
+      state.index = state.pages.length - 1;
+      state.pendingLast = false;
+    }
     renderPage();
   }
   function showBooks(title, items) {
     content.innerHTML = '<main><h1>' + esc(title) +
-      '</h1><ul class="book-list" data-paginate>' + items.map(row).join('') + '</ul></main>';
+      '</h1><div class="book-list" data-paginate>' +
+      (items.length ? items.map(row).join('') : '<p class="empty">No books to show here yet.</p>') +
+      '</div></main>';
     paginate();
   }
   function library(extra) {
-    api('/library?page=' + state.page + '&q=' + encodeURIComponent(state.query) + (extra || ''),
+    var labels = {latest: 'Latest books', reading: 'Currently reading', favourites: 'Favourites',
+      rated: 'Rated books', all: 'All books'};
+    var match;
+    if (typeof extra === 'string') state.libraryExtra = extra;
+    api('/library?page=' + state.page + '&q=' + encodeURIComponent(state.query) + state.libraryExtra,
       function (error, data) {
         if (error) return fail(error);
         state.more = data.has_more;
-        filters.innerHTML = '<button data-library="latest">Recent</button> ' +
-          '<button data-library="all">All</button> <button data-directory="authors">Authors</button> ' +
-          '<button data-directory="series">Series</button>';
-        showBooks('Library', data.items);
+        state.total = data.total;
+        state.pageSize = data.page_size;
+        filters.innerHTML = '<div class="section-tabs"><button data-library="latest">Recent</button> ' +
+          '<button data-library="reading">Reading</button> <button data-library="favourites">Favourites</button> ' +
+          '<button data-library="rated">Rated</button> <button data-library="all">All Books</button> ' +
+          '<button data-directory="authors">Authors</button> <button data-directory="series">Series</button></div>';
+        match = /[?&]view=([^&]+)/.exec(state.libraryExtra);
+        showBooks(state.query ? 'Search results' : (labels[match ? match[1] : 'latest'] || 'Library'), data.items);
       });
   }
   function directory(kind) {
     api('/library/' + kind, function (error, data) {
       if (error) return fail(error);
-      content.innerHTML = '<main><h1>' + esc(kind) +
-        '</h1><ul class="directory-list" data-paginate>' + data.items.map(function (item) {
-          return '<li class="directory-item"><button data-filter="' + kind + '" data-value="' +
-            esc(item.name) + '">' + esc(item.name) + '</button> <span class="muted">(' +
-            item.count + ')</span></li>';
-        }).join('') + '</ul></main>';
+      state.more = false;
+      content.innerHTML = '<main><h1>All ' + esc(kind) +
+        '</h1><div class="directory-grid" data-paginate>' + data.items.map(function (item) {
+          return '<button class="directory-tile" data-filter="' + kind + '" data-value="' +
+            esc(item.name) + '"><strong>' + esc(item.name) + '</strong><span>' +
+            item.count + (item.count === 1 ? ' book' : ' books') + '</span></button>';
+        }).join('') + '</div></main>';
       paginate();
     });
   }
   function discover(group) {
+    var titles = {'for-you': 'For you', trending: 'Trending', 'new-releases': 'New releases',
+      'genre?genre=fantasy': 'Fantasy'};
     group = group || 'for-you';
     api('/discover/' + group, function (error, data) {
       if (error) return fail(error);
@@ -99,7 +117,8 @@
         '<button data-discover="trending">Trending</button> ' +
         '<button data-discover="new-releases">New releases</button> ' +
         '<button data-discover="genre?genre=fantasy">Fantasy</button>';
-      showBooks(group.replace(/[-?].*/g, ' '), data.items);
+      state.more = false;
+      showBooks(titles[group] || 'Discover', data.items);
     });
   }
   function shelves() {
@@ -183,7 +202,7 @@
     var hash = location.hash.slice(1) || 'library';
     var parts = hash.split('/');
     state.page = 1;
-    if (hash === 'library') library(); else if (hash === 'discover') discover();
+    if (hash === 'library') { state.libraryExtra = ''; library(''); } else if (hash === 'discover') discover();
     else if (hash === 'shelves') shelves(); else if (hash === 'downloads') downloads();
     else if (hash === 'settings') profile(); else if (parts[0] === 'book') book(parts[1]);
     else if (parts[0] === 'shelf') shelf(parts[1]); else library();
@@ -191,7 +210,7 @@
   document.onclick = function (event) {
     var target = event.target, value;
     if ((value = target.getAttribute('data-directory'))) directory(value);
-    if ((value = target.getAttribute('data-library'))) library('&view=' + value);
+    if ((value = target.getAttribute('data-library'))) { state.page = 1; library('&view=' + value); }
     if ((value = target.getAttribute('data-discover'))) discover(value);
     if (target.getAttribute('data-filter')) library('&' +
       (target.getAttribute('data-filter') === 'authors' ? 'author' : 'series') + '=' +
@@ -219,10 +238,20 @@
     if (target.id === 'kobo-revoke') ajax('DELETE', '/api/ereader/settings/kobo-token', null,
       function (error) { if (error) fail(error); else profile(); });
     if ((value = target.getAttribute('data-page'))) {
-      if (value === 'first') state.index = 0; else if (value === 'prev' && state.index > 0) state.index--;
+      if (value === 'first') {
+        if (state.page > 1) { state.page = 1; library(); return; }
+        state.index = 0;
+      } else if (value === 'prev' && state.index > 0) state.index--;
+      else if (value === 'prev' && state.page > 1) {
+        state.page--; state.pendingLast = true; library(); return;
+      }
       else if (value === 'next' && state.index < state.pages.length - 1) state.index++;
       else if (value === 'next' && state.more) { state.page++; library(); return; }
-      else if (value === 'last') state.index = state.pages.length - 1;
+      else if (value === 'last') {
+        value = Math.max(1, Math.ceil(state.total / state.pageSize));
+        if (state.page !== value) { state.page = value; state.pendingLast = true; library(); return; }
+        state.index = state.pages.length - 1;
+      }
       renderPage();
     }
   };
