@@ -1,6 +1,7 @@
 name: Release container
 
 on:
+  workflow_dispatch:
   push:
     tags:
       - "v*"
