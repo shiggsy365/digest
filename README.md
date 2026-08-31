@@ -17,9 +17,11 @@ The same library, from either interface — pick the one that matches the
 screen you're actually holding.
 
 **Modern interface** — desktop and phone browsers:
+
 <img src="docs/screenshots/Screenshot From 2026-08-31 17-04-23.png" alt="Modern library view" width="480"><img src="docs/screenshots/Screenshot From 2026-08-31 17-05-33.png" alt="Discovery view" width="480">
 
 **E-reader interface** — the native Kindle/Kobo on-device browser:
+
 <img src="docs/screenshots/screen_002.png" alt="E-reader interface: library list view" width="360"><img src="docs/screenshots/screen_003.png" alt="E-reader interface: discovery view" width="360">
 
 ## What it does
