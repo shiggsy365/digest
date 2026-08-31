@@ -1,26 +1,60 @@
 # Digest
 
-Digest is a self-hosted ebook library and discovery service designed for modern
-browsers, Kindle browsers, Kobo browsers, OPDS clients, and Kobo device sync.
+Digest is a self-hosted, central hub for your ebook library — catalogue it,
+organise it, enrich it with metadata, and manage the entire download lifecycle,
+all without leaving the browser already built into your Kindle or Kobo.
 
-It scans an existing ebook library, groups duplicate formats, extracts embedded
-metadata, downloads improved metadata and covers, and organises approved books
-into canonical author/title folders. The modern interface provides library,
-author, series, shelf, reading-state, discovery, download, and metadata-review
-views; a separate low-complexity interface supports older e-readers.
+Most self-hosted library tools assume you manage your books from a desktop and
+just *read* on the device. Digest turns that around: browsing, searching,
+requesting a title you don't own yet, checking on a download, fixing a bad
+match — every core workflow runs from the cramped, JavaScript-light browser
+baked into an e-reader, alongside a full desktop-grade interface for when
+you're at a real keyboard.
 
-## Highlights
+## Screenshots
 
-- EPUB, KEPUB, MOBI, and AZW3 library scanning and duplicate grouping
-- Hardcover, Google Books, Open Library, ISBNdb, and NYT metadata/discovery
-- Manual and guarded automatic metadata matching with custom cover uploads
+The same library, from either interface — pick the one that matches the
+screen you're actually holding.
+
+**Modern interface** — desktop and phone browsers:
+
+![Modern interface: library grid view](docs/screenshots/modern.png)
+
+**E-reader interface** — the native Kindle/Kobo on-device browser:
+
+<img src="docs/screenshots/ereader.png" alt="E-reader interface: library list view" width="360">
+
+## What it does
+
+- **Catalogue** — scans EPUB, KEPUB, MOBI, and AZW3 files, groups duplicate
+  formats of the same book, and extracts whatever metadata is already embedded.
+- **Organise** — approved matches are filed into canonical author/title
+  folders automatically, so the library stays tidy without manual renaming.
+- **Enrich** — pulls metadata and covers from Hardcover, Google Books, Open
+  Library, ISBNdb, and NYT bestseller lists, with manual review and guarded
+  automatic matching for anything ambiguous.
+- **Acquire** — request a book you don't own and Digest can search Shelfmark
+  or Prowlarr/SABnzbd, download it, and file it into the library
+  automatically once it lands — tracked end to end from request to shelf.
+- **Deliver** — Send-to-Kindle, an authenticated OPDS catalogue, and native
+  Kobo device sync (reading progress, collections, covers) get books onto
+  the device without a cable.
+
+## Interfaces
+
+- A responsive modern UI for desktop and phone browsers.
+- A dedicated single-page client built for Kindle and Kobo's own on-device
+  browsers — library, discovery, shelves, downloads, and account settings,
+  all reachable without ever plugging the device into a computer.
+- Authenticated OPDS for any OPDS-capable reader app.
+
+## Also included
+
 - Personal and shared shelves, including a live **All Books** shelf
-- Kobo private-device sync, reading progress, collections, and covers
-- Authenticated OPDS catalogue and Send-to-Kindle delivery
-- Optional acquisition through Shelfmark or Prowlarr plus SABnzbd
-- Responsive modern UI and dedicated Kindle/Kobo browser templates
-- PostgreSQL persistence, Alembic migrations, durable background jobs, and
-  Traefik-compatible HTTPS routing
+- Reading-state tracking (progress, ratings, favourites) synced from Kobo
+- Admin metadata-review queue for anything matched with low confidence
+- PostgreSQL persistence, Alembic migrations, and durable background jobs
+- Traefik-compatible HTTPS routing
 
 ## Documentation
 

@@ -416,7 +416,12 @@
     if ((value = target.getAttribute('data-fontsize'))) setFontSize(value);
     if ((value = target.getAttribute('data-fontfamily'))) setFontFamily(value);
     if (target.id === 'menu-toggle') { value = document.getElementById('spa-menu');
-      value.className = value.className ? '' : 'hidden'; }
+      value.className = value.className ? '' : 'hidden';
+      document.getElementById('spa-menu-backdrop').className = value.className; }
+    if (target.id === 'spa-menu-backdrop') {
+      document.getElementById('spa-menu').className = 'hidden';
+      target.className = 'hidden';
+    }
     if (target.id === 'search-toggle') { value = document.getElementById('spa-search');
       value.className = value.className ? '' : 'hidden'; }
     if (target.id === 'kobo-token') ajax('POST', '/api/ereader/settings/kobo-token', null,

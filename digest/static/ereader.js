@@ -73,17 +73,25 @@ function toggleSortBar() {
 
 function toggleBurgerMenu() {
     var menu = document.getElementById('burger-menu');
+    var backdrop = document.getElementById('burger-backdrop');
     if (!menu) return;
-    if (hasClass(menu, 'hidden')) removeClass(menu, 'hidden');
-    else addClass(menu, 'hidden');
+    if (hasClass(menu, 'hidden')) {
+        removeClass(menu, 'hidden');
+        if (backdrop) removeClass(backdrop, 'hidden');
+    } else {
+        addClass(menu, 'hidden');
+        if (backdrop) addClass(backdrop, 'hidden');
+    }
 }
 
 document.addEventListener('click', function (event) {
     var menu = document.getElementById('burger-menu');
+    var backdrop = document.getElementById('burger-backdrop');
     var btn = document.getElementById('nav-burger-btn');
     if (!menu || hasClass(menu, 'hidden')) return;
     if (menu.contains(event.target) || event.target === btn) return;
     addClass(menu, 'hidden');
+    if (backdrop) addClass(backdrop, 'hidden');
 });
 
 // --- Paginated lists ---
