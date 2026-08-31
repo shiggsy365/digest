@@ -79,7 +79,7 @@ def test_ereader_shell_keeps_secondary_routes_in_menu() -> None:
         previous = settings.ereader_spa
         settings.ereader_spa = False
         try:
-            response = render(request, "library.html", {"books": [], "return_to": "/"}, user)
+            response = render(request, "setup.html", {}, user)
         finally:
             settings.ereader_spa = previous
 
