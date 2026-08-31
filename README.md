@@ -72,3 +72,6 @@ version for predictable deployments or use `latest` to follow stable releases.
 
 No licence has yet been selected. All rights are reserved until a licence file is
 added to the repository.
+
+
+[<img src="https://github.com/shiggsy365/AIOStreamsKODI/blob/main/.github/support_me_on_kofi_red.png?raw=true">](https://ko-fi.com/shiggsy365)
