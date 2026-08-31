@@ -152,8 +152,18 @@ echo
 
 if [[ -n "$HEALTH_URL" ]]; then
   echo "Health check: $HEALTH_URL"
-  curl -fsS "$HEALTH_URL"
-  echo
+  for attempt in {1..12}; do
+    if curl -fsS "$HEALTH_URL"; then
+      echo
+      break
+    fi
+    if [[ "$attempt" -eq 12 ]]; then
+      echo "Health check failed after ${attempt} attempts." >&2
+      exit 1
+    fi
+    echo "Waiting for Digest to become healthy (${attempt}/12)..."
+    sleep 5
+  done
 fi
 REMOTE
 )
