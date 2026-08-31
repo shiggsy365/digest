@@ -67,7 +67,7 @@ document.addEventListener('click', function (event) {
 // Each page has at most one list carrying the "js-paginated" class. It fits
 // as many of its already-rendered items as the visible content area allows,
 // paging locally through them; data-prev-url/data-next-url/data-first-url
-// (when present) send the First/Prev/Next buttons to the next server batch
+// and data-last-url (when present) send the controls to the matching server batch
 // once the locally-held items run out.
 var pagedListState = null;
 
@@ -129,7 +129,8 @@ function fitPagedLists() {
         page: page,
         prevUrl: container.getAttribute('data-prev-url') || '',
         nextUrl: container.getAttribute('data-next-url') || '',
-        firstUrl: container.getAttribute('data-first-url') || ''
+        firstUrl: container.getAttribute('data-first-url') || '',
+        lastUrl: container.getAttribute('data-last-url') || ''
     };
     renderPagedList();
 }
@@ -160,7 +161,7 @@ function renderPagedList() {
     if (first) first.disabled = atFirst;
     if (prev) prev.disabled = atFirst;
     if (next) next.disabled = atLocalLast && !state.nextUrl;
-    if (last) last.disabled = atLocalLast;
+    if (last) last.disabled = atLocalLast && !state.lastUrl;
     if (label) {
         var text = 'Page ' + (state.page + 1);
         if (totalLocalPages > 1 || state.nextUrl) text += ' of ' + totalLocalPages + (state.nextUrl ? '+' : '');
@@ -182,6 +183,10 @@ function pagedGo(direction) {
         if (state.page < totalLocalPages - 1) state.page++;
         else if (state.nextUrl) { window.location.href = state.nextUrl; return; }
     } else if (direction === 'last') {
+        if (state.lastUrl && !(state.page === totalLocalPages - 1 && !state.nextUrl)) {
+            window.location.href = state.lastUrl;
+            return;
+        }
         state.page = totalLocalPages - 1;
     }
     renderPagedList();
@@ -190,10 +195,15 @@ function pagedGo(direction) {
 }
 
 (function () {
+    var back = document.getElementById('pg-back');
     var first = document.getElementById('pg-first');
     var prev = document.getElementById('pg-prev');
     var next = document.getElementById('pg-next');
     var last = document.getElementById('pg-last');
+    if (back) back.onclick = function () {
+        if (window.history.length > 1) window.history.back();
+        else window.location.href = '/';
+    };
     if (first) first.onclick = function () { pagedGo('first'); };
     if (prev) prev.onclick = function () { pagedGo('prev'); };
     if (next) next.onclick = function () { pagedGo('next'); };

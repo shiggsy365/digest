@@ -29,12 +29,24 @@ def test_ereader_static_assets_keep_eink_layout_contract() -> None:
     ereader_css = (root / "ereader.css").read_text()
     spa_css = (root / "ereader-app.css").read_text()
     spa_js = (root / "ereader-app.js").read_text()
+    ereader_base = (
+        Path(__file__).parents[1] / "digest" / "templates" / "ereader" / "base.html"
+    ).read_text()
+    spa_base = (
+        Path(__file__).parents[1] / "digest" / "templates" / "ereader" / "app.html"
+    ).read_text()
 
     assert "prefers-color-scheme:dark" not in ereader_css
     assert "prefers-color-scheme:dark" not in spa_css
     assert "function pageSizeFor" in spa_js
     assert "page_size=40" in spa_js
     assert "description-page" in spa_js
+    assert "id=\"pg-back\"" in ereader_base
+    assert "id=\"spa-back\"" in spa_base
+    assert "&lt;&lt;" in ereader_base and "&gt;&gt;" in ereader_base
+    assert "&lt;&lt;" in spa_base and "&gt;&gt;" in spa_base
+    assert "#shell-filters-row .shell-cell" in ereader_css
+    assert "#spa-filters{position:relative;z-index:1" in spa_css
 
 
 def test_ereader_book_covers_are_links() -> None:

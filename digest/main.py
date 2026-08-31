@@ -1,4 +1,5 @@
 import json
+import math
 import mimetypes
 import re
 import secrets
@@ -744,8 +745,10 @@ def library(
         direction if direction in {"asc", "desc"} else default_sort_direction(selected_sort)
     )
     page_size = 32 if is_ereader_request(request) else 24
+    last_page = 1
     if filtered:
         result_count = db.scalar(select(func.count()).select_from(query.subquery())) or 0
+        last_page = max(1, math.ceil(result_count / page_size))
         results = db.scalars(
             query.order_by(*book_order(selected_sort, selected_direction))
             .offset((page - 1) * page_size)
@@ -875,6 +878,7 @@ def library(
             "favourites_navigation": "/?view=favourites",
             "rated_navigation": "/?view=rated",
             "page": page,
+            "last_page": last_page,
             "has_next": has_next,
         },
         user,
@@ -1683,9 +1687,11 @@ def shelf_detail(
         )
     page = max(page, 1)
     ordered_query = query.order_by(*book_order(selected_sort, selected_direction), Book.id)
+    total = db.scalar(select(func.count()).select_from(query.subquery())) or 0
+    page_size = 32
     if is_ereader_request(request):
-        results = list(db.scalars(ordered_query.offset((page - 1) * 32).limit(33)))
-        books, has_next = results[:32], len(results) > 32
+        results = list(db.scalars(ordered_query.offset((page - 1) * page_size).limit(page_size + 1)))
+        books, has_next = results[:page_size], len(results) > page_size
     else:
         books, has_next = list(db.scalars(ordered_query)), False
     return_to = f"/shelves/{shelf.id}?{urlencode({'sort': selected_sort, 'direction': selected_direction, 'metadata': metadata, 'page': page})}"
@@ -1702,6 +1708,7 @@ def shelf_detail(
             "return_to": return_to,
             "can_manage": shelf.shared or shelf.owner_id == user.id,
             "page": page,
+            "last_page": max(1, math.ceil(total / page_size)),
             "has_next": has_next,
         },
         user,

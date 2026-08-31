@@ -87,11 +87,24 @@
   function renderPage() {
     var list = content.querySelector('[data-paginate]');
     var range = state.pages[state.index] || [0, 0];
+    var first = document.querySelector('[data-page="first"]');
+    var prev = document.querySelector('[data-page="prev"]');
+    var next = document.querySelector('[data-page="next"]');
+    var last = document.querySelector('[data-page="last"]');
+    var localFirst = state.index === 0;
+    var localLast = state.index >= state.pages.length - 1;
+    var serverLast = state.serverPaging && state.total ?
+      Math.max(1, Math.ceil(state.total / state.pageSize)) : state.page;
     var i;
     if (list) for (i = 0; i < list.children.length; i++)
       list.children[i].style.display = i >= range[0] && i < range[1] ? '' : 'none';
     document.getElementById('page-label').innerHTML = state.pages.length ?
-      'Page ' + (state.index + 1) + ' of ' + state.pages.length + (state.more ? '+' : '') : '';
+      'Page ' + (state.serverPaging ? state.page + '.' : '') + (state.index + 1) +
+      ' of ' + (state.serverPaging ? serverLast + (state.more ? '+' : '') : state.pages.length) : '';
+    if (first) first.disabled = state.serverPaging ? state.page <= 1 && localFirst : localFirst;
+    if (prev) prev.disabled = state.serverPaging ? state.page <= 1 && localFirst : localFirst;
+    if (next) next.disabled = state.serverPaging ? !state.more && localLast : localLast;
+    if (last) last.disabled = state.serverPaging ? serverLast <= state.page && localLast : localLast;
   }
   function paginate() {
     var list = content.querySelector('[data-paginate]');
@@ -99,10 +112,6 @@
       pageSizeFor(list, state.serverPaging ? state.pageSize : 6), i;
     state.pages = [];
     state.index = 0;
-    document.querySelector('[data-page="first"]').style.display = '';
-    document.querySelector('[data-page="prev"]').style.display = '';
-    document.querySelector('[data-page="next"]').style.display = '';
-    document.querySelector('[data-page="last"]').style.display = '';
     if (list && list.children.length) {
       for (i = 0; i < list.children.length; i += size)
         state.pages.push([i, Math.min(i + size, list.children.length)]);
@@ -334,7 +343,6 @@
     var hash = location.hash.slice(1) || 'library';
     var parts = hash.split('/');
     var bookParts;
-    document.getElementById('spa-back').className = state.lastHash && state.lastHash !== hash ? '' : 'hidden';
     if (hash !== state.lastHash) state.lastHash = hash;
     state.page = 1;
     if (hash === 'library') { state.libraryExtra = ''; library(''); } else if (hash === 'discover') discover('trending');
@@ -387,7 +395,8 @@
       function (error) { if (error) fail(error); else profile(); });
     if (target.id === 'spa-back') {
       if (state.detail && state.originHash) location.hash = state.originHash;
-      else history.back();
+      else if (history.length > 1) history.back();
+      else location.hash = 'library';
     }
     if ((value = target.getAttribute('data-kindle'))) ajax('POST', '/api/ereader/books/' + value +
       '/kindle', null, function (error) {
