@@ -11,6 +11,7 @@ from urllib.parse import parse_qs
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi.responses import JSONResponse
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
@@ -43,11 +44,18 @@ from .models import (
     Role,
     Shelf,
     ShelfBook,
+    TrustedDevice,
     User,
     WantedItem,
     WantedStatus,
 )
-from .security import KOBO_TOKEN_NAME, current_user
+from .security import (
+    KOBO_TOKEN_NAME,
+    TRUSTED_DEVICE_COOKIE,
+    current_user,
+    revoke_trusted_device,
+    token_digest,
+)
 from .tokens import create_token, revoke_token
 
 router = APIRouter(prefix="/api/ereader", tags=["ereader"])
@@ -95,6 +103,37 @@ def _book(book: Book, state: ReadingState | None = None) -> dict[str, Any]:
             "progress_percent": state.progress_percent,
         },
     }
+
+
+def _current_trusted_device(request: Request, db: Session, user: User) -> TrustedDevice | None:
+    token = request.cookies.get(TRUSTED_DEVICE_COOKIE, "")
+    if not token.startswith("dtd_"):
+        return None
+    return db.scalar(
+        select(TrustedDevice).where(
+            TrustedDevice.user_id == user.id,
+            TrustedDevice.token_hash == token_digest(token),
+            TrustedDevice.revoked_at.is_(None),
+        )
+    )
+
+
+def _trusted_devices(request: Request, db: Session, user: User) -> list[dict[str, Any]]:
+    current = _current_trusted_device(request, db, user)
+    devices = db.scalars(
+        select(TrustedDevice)
+        .where(TrustedDevice.user_id == user.id, TrustedDevice.revoked_at.is_(None))
+        .order_by(TrustedDevice.last_used_at.desc(), TrustedDevice.id.desc())
+    ).all()
+    return [
+        {
+            "id": device.id,
+            "user_agent": device.user_agent or "Unknown device",
+            "last_used_at": device.last_used_at.isoformat(),
+            "current": bool(current and current.id == device.id),
+        }
+        for device in devices
+    ]
 
 
 def _external(item: Any) -> dict[str, Any]:
@@ -585,6 +624,8 @@ def profile(request: Request, db: Db):
     return {"kindle_email": user.kindle_email or "", "kobo_sync_shelf_id": user.kobo_sync_shelf_id,
             "kobo_sync_all_books": user.kobo_sync_all_books,
             "kobo_configured": active_kobo_token(db, user) is not None,
+            "trusted_device_days": get_settings().trusted_device_days,
+            "trusted_devices": _trusted_devices(request, db, user),
             "shelves": [{"id": item.id, "name": item.name} for item in _accessible_shelves(db, user)]}
 
 
@@ -617,3 +658,24 @@ def delete_kobo_token(request: Request, db: Db):
     user = _user(request, db); _csrf(request); current = active_kobo_token(db, user)
     if current: revoke_token(db, user, current)
     return {"ok": True}
+
+
+@router.delete("/settings/trusted-devices/{device_id}")
+def delete_trusted_device(device_id: int, request: Request, db: Db):
+    user = _user(request, db); _csrf(request)
+    device = db.get(TrustedDevice, device_id)
+    if not device or device.user_id != user.id: raise HTTPException(404)
+    revoke_trusted_device(db, device)
+    db.add(AuditEvent(event="trusted_device_revoked", user_id=user.id,
+                      message=f"Revoked trusted device {device.id}"))
+    db.commit()
+    response = JSONResponse({"ok": True})
+    current = request.cookies.get(TRUSTED_DEVICE_COOKIE, "")
+    if current and token_digest(current) == device.token_hash:
+        response.delete_cookie(
+            TRUSTED_DEVICE_COOKIE,
+            path="/",
+            samesite="lax",
+            secure=get_settings().public_url.startswith("https://"),
+        )
+    return response

@@ -67,6 +67,29 @@ def test_flagged_ereader_render_uses_spa_shell() -> None:
         assert '>Menu</button>' in html
 
 
+def test_ereader_shell_keeps_secondary_routes_in_menu() -> None:
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    with Session(engine, expire_on_commit=False) as db:
+        user = User(username="reader", password_hash=hash_password("long-test-password"),
+                    role=Role.USER)
+        db.add(user)
+        db.commit()
+        request = request_for(user, "/")
+        previous = settings.ereader_spa
+        settings.ereader_spa = False
+        try:
+            response = render(request, "library.html", {"books": [], "return_to": "/"}, user)
+        finally:
+            settings.ereader_spa = previous
+
+        html = response.body.decode()
+        nav = html.split('<div id="burger-menu"', 1)[0]
+        assert 'href="/shelves"' not in nav
+        assert '<button type="button" id="nav-burger-btn"' in nav
+        assert 'href="/shelves" role="menuitem">Shelves</a>' in html
+
+
 def test_shelf_api_paginates_every_book_in_six_row_batches() -> None:
     engine = create_engine("sqlite:///:memory:")
     Base.metadata.create_all(engine)

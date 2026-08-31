@@ -17,6 +17,7 @@ class Settings(BaseSettings):
     metadata_refresh_hours: int = 168
     timezone: str = "Europe/London"
     session_days: int = 30
+    trusted_device_days: int = 180
     max_kindle_attachment_mb: int = 25
     ereader_spa: bool = False
 

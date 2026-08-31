@@ -103,11 +103,23 @@ from .models import (
     Role,
     Shelf,
     ShelfBook,
+    TrustedDevice,
     User,
     WantedItem,
     WantedStatus,
 )
-from .security import KOBO_TOKEN_NAME, current_user, hash_password, setup_required, verify_password
+from .security import (
+    KOBO_TOKEN_NAME,
+    TRUSTED_DEVICE_COOKIE,
+    create_trusted_device,
+    current_user,
+    hash_password,
+    revoke_trusted_device,
+    setup_required,
+    token_digest,
+    trusted_device_from_request,
+    verify_password,
+)
 from .text import plain_text
 from .tokens import TokenError, create_token, revoke_token
 
@@ -208,6 +220,9 @@ def startup() -> None:
 def user_or_none(request: Request, db: Session) -> User | None:
     user_id = request.session.get("user_id")
     user = db.get(User, user_id) if user_id else None
+    if not user or not user.is_active:
+        device = trusted_device_from_request(request, db)
+        user = db.get(User, device.user_id) if device else None
     return user if user and user.is_active else None
 
 
@@ -231,6 +246,72 @@ def csrf(request: Request) -> str:
 def check_csrf(request: Request, value: str) -> None:
     if not secrets.compare_digest(request.session.get("csrf", ""), value):
         raise HTTPException(status_code=403, detail="Invalid form token")
+
+
+def trusted_device_cookie_options() -> dict:
+    return {
+        "max_age": settings.trusted_device_days * 86400,
+        "httponly": True,
+        "samesite": "lax",
+        "secure": settings.public_url.startswith("https://"),
+    }
+
+
+def set_trusted_device_cookie(response: Response, token: str) -> None:
+    response.set_cookie(TRUSTED_DEVICE_COOKIE, token, **trusted_device_cookie_options())
+
+
+def clear_trusted_device_cookie(response: Response) -> None:
+    response.delete_cookie(
+        TRUSTED_DEVICE_COOKIE,
+        path="/",
+        samesite="lax",
+        secure=settings.public_url.startswith("https://"),
+    )
+
+
+def current_trusted_device(request: Request, db: Session, user: User) -> TrustedDevice | None:
+    token = request.cookies.get(TRUSTED_DEVICE_COOKIE, "")
+    if not token.startswith("dtd_"):
+        return None
+    return db.scalar(
+        select(TrustedDevice).where(
+            TrustedDevice.user_id == user.id,
+            TrustedDevice.token_hash == token_digest(token),
+            TrustedDevice.revoked_at.is_(None),
+        )
+    )
+
+
+def trusted_devices_for_settings(request: Request, db: Session, user: User) -> list[dict]:
+    current = current_trusted_device(request, db, user)
+    devices = db.scalars(
+        select(TrustedDevice)
+        .where(TrustedDevice.user_id == user.id, TrustedDevice.revoked_at.is_(None))
+        .order_by(TrustedDevice.last_used_at.desc(), TrustedDevice.id.desc())
+    ).all()
+    return [
+        {
+            "id": device.id,
+            "user_agent": device.user_agent or "Unknown device",
+            "created_at": device.created_at,
+            "last_used_at": device.last_used_at,
+            "current": bool(current and current.id == device.id),
+        }
+        for device in devices
+    ]
+
+
+def settings_context(request: Request, db: Session, user: User, **extra) -> dict:
+    context = {
+        "settings": settings_map(db),
+        "shelves": accessible_shelves(db, user),
+        "kobo_configured": active_kobo_token(db, user) is not None,
+        "trusted_devices": trusted_devices_for_settings(request, db, user),
+        "trusted_device_days": settings.trusted_device_days,
+    }
+    context.update(extra)
+    return context
 
 
 def safe_return_to(value: str | None, fallback: str = "/") -> str:
@@ -535,11 +616,28 @@ def login(
         )
     request.session.clear()
     request.session["user_id"] = user.id
+    response = RedirectResponse("/", 303)
     if remember_me:
         request.session["remember_me"] = True
+        trusted_device, trusted_token = create_trusted_device(
+            db, user, request.headers.get("user-agent", "")
+        )
+        set_trusted_device_cookie(response, trusted_token)
+        db.add(
+            AuditEvent(
+                event="trusted_device_created",
+                user_id=user.id,
+                message=f"Remembered trusted device {trusted_device.id}",
+            )
+        )
+    else:
+        existing_device = current_trusted_device(request, db, user)
+        if existing_device:
+            revoke_trusted_device(db, existing_device)
+        clear_trusted_device_cookie(response)
     db.add(AuditEvent(event="login", user_id=user.id, message="Login successful"))
     db.commit()
-    return RedirectResponse("/", 303)
+    return response
 
 
 @app.post("/logout")
@@ -548,10 +646,15 @@ def logout(
 ):
     user = require_user(request, db)
     check_csrf(request, form_csrf)
+    device = current_trusted_device(request, db, user)
+    if device:
+        revoke_trusted_device(db, device)
     db.add(AuditEvent(event="login", user_id=user.id, message="Logout"))
     db.commit()
     request.session.clear()
-    return RedirectResponse("/login", 303)
+    response = RedirectResponse("/login", 303)
+    clear_trusted_device_cookie(response)
+    return response
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -1976,11 +2079,7 @@ def settings_page(request: Request, db: Annotated[Session, Depends(get_db)]):
     return render(
         request,
         "settings.html",
-        {
-            "settings": settings_map(db),
-            "shelves": accessible_shelves(db, user),
-            "kobo_configured": active_kobo_token(db, user) is not None,
-        },
+        settings_context(request, db, user),
         user,
     )
 
@@ -2030,12 +2129,7 @@ def create_kobo_token(
     return render(
         request,
         "settings.html",
-        {
-            "settings": settings_map(db),
-            "shelves": accessible_shelves(db, user),
-            "kobo_configured": True,
-            "kobo_endpoint": endpoint,
-        },
+        settings_context(request, db, user, kobo_configured=True, kobo_endpoint=endpoint),
         user,
     )
 
@@ -2052,6 +2146,34 @@ def revoke_kobo_token(
     if current:
         revoke_token(db, user, current)
     return RedirectResponse("/settings", 303)
+
+
+@app.post("/settings/trusted-devices/{device_id}/revoke")
+def revoke_trusted_device_route(
+    device_id: int,
+    request: Request,
+    db: Annotated[Session, Depends(get_db)],
+    form_csrf: Annotated[str, Form()],
+):
+    user = require_user(request, db)
+    check_csrf(request, form_csrf)
+    device = db.get(TrustedDevice, device_id)
+    if not device or device.user_id != user.id:
+        raise HTTPException(404, "Trusted device not found")
+    revoke_trusted_device(db, device)
+    db.add(
+        AuditEvent(
+            event="trusted_device_revoked",
+            user_id=user.id,
+            message=f"Revoked trusted device {device.id}",
+        )
+    )
+    db.commit()
+    response = RedirectResponse("/settings", 303)
+    current = request.cookies.get(TRUSTED_DEVICE_COOKIE, "")
+    if current and token_digest(current) == device.token_hash:
+        clear_trusted_device_cookie(response)
+    return response
 
 
 @app.get("/kobo/{token}/v1/initialization")

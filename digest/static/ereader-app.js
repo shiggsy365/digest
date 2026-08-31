@@ -1,7 +1,7 @@
 (function () {
   'use strict';
   var state = {page: 1, pages: [], index: 0, more: false, query: '', libraryExtra: '',
-    total: 0, pageSize: 6, pendingLast: false, discoveryListing: false, serverPaging: false,
+    total: 0, pageSize: 40, pendingLast: false, discoveryListing: false, serverPaging: false,
     loader: null, navigation: '', detail: false, previousId: null, nextId: null, lastHash: '',
     originHash: ''};
   var content = document.getElementById('spa-content');
@@ -12,6 +12,21 @@
     var node = document.createElement('div');
     node.appendChild(document.createTextNode(value == null ? '' : String(value)));
     return node.innerHTML;
+  }
+  function attr(value) {
+    return esc(value).replace(/"/g, '&quot;');
+  }
+  function descriptionPages(text) {
+    var value = String(text || 'No description available.');
+    var parts = value.split(/\n\s*\n/), pages = [], current = '', i;
+    for (i = 0; i < parts.length; i++) {
+      if ((current + '\n\n' + parts[i]).length > 900 && current) {
+        pages.push(current);
+        current = parts[i];
+      } else current = current ? current + '\n\n' + parts[i] : parts[i];
+    }
+    if (current) pages.push(current);
+    return pages;
   }
   function ajax(method, url, body, done) {
     var xhr = new XMLHttpRequest();
@@ -36,25 +51,38 @@
     return '<a href="#author?author=' + encodeURIComponent(author) + '">More by this author</a>';
   }
   function row(book) {
-    var cover = book.cover_url ? '<img src="' + esc(book.cover_url) + '" alt="">' : '';
+    var href;
+    var cover = book.cover_url ? '<img src="' + attr(book.cover_url) + '" alt="">' : '';
     var author = book.author || (book.authors || [])[0] || '';
-    var badge = state.discoveryListing ? '<span class="library-status ' +
+    var badge = state.discoveryListing ? ' <span class="library-status ' +
       (book.in_library ? 'owned' : 'not-owned') + '">' +
       (book.in_library ? 'In library' : 'Not in library') + '</span>' : '';
-    if (!book.id) return '<article class="book-row">' +
-      (cover ? '<div class="book-cover">' + cover + '</div>' : '') +
-      '<div class="book-body"><h3><a href="#discover-book?' +
+    if (!book.id) {
+      href = '#discover-book?' +
       'source=' + encodeURIComponent(book.source || 'openlibrary') + '&source_id=' +
       encodeURIComponent(book.source_id || '') + '&title=' + encodeURIComponent(book.title) +
       '&author=' + encodeURIComponent(author) + '&isbn=' + encodeURIComponent(book.isbn || '') +
       '&cover_url=' + encodeURIComponent(book.cover_url || '') + '&description=' +
-      encodeURIComponent((book.description || '').substring(0, 4000)) + '">' + esc(book.title) +
-      '</a>' + badge + '</h3><p>' + esc(author) + '</p></div></article>';
-    return '<article class="book-row">' + (cover ? '<div class="book-cover">' + cover + '</div>' : '') +
-      '<div class="book-body"><h3><a href="#book/' + esc(book.id) + '?navigation=' +
-      encodeURIComponent(state.navigation) + '">' + esc(book.title) +
-      '</a>' + badge + '</h3><p>' + esc(author) + (book.series ? ' &middot; ' + esc(book.series) +
-      (book.series_number ? ' #' + esc(book.series_number) : '') : '') + '</p></div></article>';
+      encodeURIComponent((book.description || '').substring(0, 4000));
+      return '<article class="book-row">' +
+      (cover ? '<div class="book-cover"><a href="' + attr(href) + '">' + cover + '</a></div>' : '') +
+      '<div class="book-body"><h3><a href="' + attr(href) + '">' + esc(book.title) +
+      '</a></h3><p>' + esc(author) + badge + '</p></div></article>';
+    }
+    href = '#book/' + book.id + '?navigation=' + encodeURIComponent(state.navigation);
+    return '<article class="book-row">' +
+      (cover ? '<div class="book-cover"><a href="' + attr(href) + '">' + cover + '</a></div>' : '') +
+      '<div class="book-body"><h3><a href="' + attr(href) + '">' + esc(book.title) +
+      '</a></h3><p>' + esc(author) + (book.series ? ' &middot; ' + esc(book.series) +
+      (book.series_number ? ' #' + esc(book.series_number) : '') : '') + badge + '</p></div></article>';
+  }
+  function pageSizeFor(list, fallback) {
+    var contentHeight = content.clientHeight || 0;
+    var available = contentHeight - (list ? list.offsetTop : 0) - 8;
+    var item = list && list.children && list.children.length ? list.children[0] : null;
+    var height = item ? item.offsetHeight : 0;
+    if (!available || !height) return fallback;
+    return Math.max(1, Math.floor(available / Math.max(1, height)));
   }
   function renderPage() {
     var list = content.querySelector('[data-paginate]');
@@ -63,16 +91,14 @@
     if (list) for (i = 0; i < list.children.length; i++)
       list.children[i].style.display = i >= range[0] && i < range[1] ? '' : 'none';
     document.getElementById('page-label').innerHTML = state.pages.length ?
-      (state.serverPaging ? 'Page ' + state.page + ' of ' +
-        Math.max(1, Math.ceil(state.total / state.pageSize)) :
-        'Page ' + (state.index + 1) + ' of ' + state.pages.length) : '';
+      'Page ' + (state.index + 1) + ' of ' + state.pages.length + (state.more ? '+' : '') : '';
   }
   function paginate() {
     var list = content.querySelector('[data-paginate]');
-    var size = parseInt(list && list.getAttribute('data-page-size'), 10) || 6, i;
+    var size = parseInt(list && list.getAttribute('data-page-size'), 10) ||
+      pageSizeFor(list, state.serverPaging ? state.pageSize : 6), i;
     state.pages = [];
     state.index = 0;
-    state.detail = false;
     document.querySelector('[data-page="first"]').style.display = '';
     document.querySelector('[data-page="prev"]').style.display = '';
     document.querySelector('[data-page="next"]').style.display = '';
@@ -88,6 +114,7 @@
     renderPage();
   }
   function showBooks(title, items) {
+    state.detail = false;
     content.innerHTML = '<main><h1>' + esc(title) +
       '</h1><div class="book-list" data-paginate>' +
       (items.length ? items.map(row).join('') : '<p class="empty">No books to show here yet.</p>') +
@@ -103,7 +130,7 @@
     state.serverPaging = true;
     state.loader = function () { library(); };
     state.navigation = 'library?q=' + encodeURIComponent(state.query) + state.libraryExtra;
-    api('/library?page_size=6&page=' + state.page + '&q=' + encodeURIComponent(state.query) +
+    api('/library?page_size=40&page=' + state.page + '&q=' + encodeURIComponent(state.query) +
       state.libraryExtra,
       function (error, data) {
         if (error) return fail(error);
@@ -119,6 +146,7 @@
   }
   function directory(kind) {
     state.discoveryListing = false;
+    state.detail = false;
     state.serverPaging = false;
     state.loader = null;
     state.page = 1;
@@ -128,8 +156,8 @@
       content.innerHTML = '<main><h1>All ' + esc(kind) +
         '</h1><div class="directory-grid" data-paginate data-page-size="20">' +
         data.items.map(function (item) {
-          return '<button class="directory-tile" data-filter="' + kind + '" data-value="' +
-            esc(item.name) + '"><strong>' + esc(item.name) + '</strong><span>' +
+          return '<button class="directory-tile" data-filter="' + attr(kind) + '" data-value="' +
+            attr(item.name) + '"><strong>' + esc(item.name) + '</strong><span>' +
             item.count + (item.count === 1 ? ' book' : ' books') + '</span></button>';
         }).join('') + '</div></main>';
       paginate();
@@ -179,6 +207,7 @@
   }
   function shelves() {
     state.serverPaging = false;
+    state.detail = false;
     state.loader = null;
     api('/shelves', function (error, data) {
       if (error) return fail(error);
@@ -194,11 +223,12 @@
   }
   function shelf(id) { state.serverPaging = true; state.loader = function () { shelf(id); };
     state.navigation = 'shelf:' + id;
-    api('/shelves/' + id + '?page_size=6&page=' + state.page, function (error, data) {
+    api('/shelves/' + id + '?page_size=40&page=' + state.page, function (error, data) {
     if (error) return fail(error); state.more = data.has_more; state.total = data.total;
     state.pageSize = data.page_size; showBooks(data.shelf.name, data.items);
   }); }
   function book(id, navigation) {
+    var pages, actions;
     state.discoveryListing = false;
     state.serverPaging = false;
     state.loader = null;
@@ -208,50 +238,53 @@
       state.detail = true;
       state.previousId = data.previous_id;
       state.nextId = data.next_id;
+      pages = descriptionPages(data.description);
+      actions = (data.previous_id ? '<a href="#book/' + attr(data.previous_id) + '?navigation=' +
+        encodeURIComponent(state.navigation) + '">Previous book</a>' : '') +
+        (data.next_id ? '<a href="#book/' + attr(data.next_id) + '?navigation=' +
+        encodeURIComponent(state.navigation) + '">Next book</a>' : '') +
+        moreByAuthor(data.author) + '<button data-kindle="' + attr(data.id) + '">Send to Kindle</button>';
       filters.innerHTML = '';
       content.innerHTML = '<main><div class="detail-heading">' +
-        (data.cover_url ? '<img src="' + esc(data.cover_url) + '" alt="">' : '') +
+        (data.cover_url ? '<img src="' + attr(data.cover_url) + '" alt="">' : '') +
         '<div><h1>' + esc(data.title) + '</h1><p>' + esc(data.author) + '</p></div></div>' +
-        '<div class="description">' + esc(data.description || 'No description available.') + '</div>' +
-        '<div class="actions">' + moreByAuthor(data.author) + '<button data-kindle="' +
-        esc(data.id) + '">Send to Kindle</button>' +
+        '<div class="description" data-paginate data-page-size="1">' +
+        pages.map(function (part) { return '<div class="description-page">' + esc(part) + '</div>'; }).join('') +
+        '</div><div class="actions">' + actions +
         '<span id="book-message"></span></div></main>';
-      state.pages = [];
-      document.querySelector('[data-page="first"]').style.display = 'none';
-      document.querySelector('[data-page="last"]').style.display = 'none';
-      document.getElementById('page-label').innerHTML = '';
+      paginate();
     });
   }
   function discoveryBook(query) {
+    var pages;
     state.serverPaging = false;
     state.loader = null;
     api('/discover/book?' + query, function (error, data) {
       var target;
       if (error) return fail(error);
       state.discoveryListing = false;
+      state.detail = true;
       filters.innerHTML = '';
-      target = data.in_library ? '<button data-kindle="' + esc(data.library_book_id) +
-        '">Send to Kindle</button>' : '<button data-want="1" data-source="' + esc(data.source) +
-        '" data-source-id="' + esc(data.source_id || '') + '" data-title="' + esc(data.title) +
-        '" data-author="' + esc(data.author || '') + '" data-cover="' + esc(data.cover_url || '') +
+      pages = descriptionPages(data.description);
+      target = data.in_library ? '<button data-kindle="' + attr(data.library_book_id) +
+        '">Send to Kindle</button>' : '<button data-want="1" data-source="' + attr(data.source) +
+        '" data-source-id="' + attr(data.source_id || '') + '" data-title="' + attr(data.title) +
+        '" data-author="' + attr(data.author || '') + '" data-cover="' + attr(data.cover_url || '') +
         '">Request download</button>';
       content.innerHTML = '<main><div class="detail-heading">' +
-        (data.cover_url ? '<img src="' + esc(data.cover_url) + '" alt="">' : '') +
+        (data.cover_url ? '<img src="' + attr(data.cover_url) + '" alt="">' : '') +
         '<div><h1>' + esc(data.title) + '</h1><p>' + esc(data.author || '') + '</p></div></div>' +
-        '<div class="description">' + esc(data.description || 'No description available.') + '</div>' +
+        '<div class="description" data-paginate data-page-size="1">' +
+        pages.map(function (part) { return '<div class="description-page">' + esc(part) + '</div>'; }).join('') +
+        '</div>' +
         '<div class="actions">' + moreByAuthor(data.author) + target +
         '<span id="book-message"></span></div></main>';
-      state.pages = [];
-      state.detail = false;
-      document.querySelector('[data-page="first"]').style.display = 'none';
-      document.querySelector('[data-page="prev"]').style.display = 'none';
-      document.querySelector('[data-page="next"]').style.display = 'none';
-      document.querySelector('[data-page="last"]').style.display = 'none';
-      document.getElementById('page-label').innerHTML = '';
+      paginate();
     });
   }
   function downloads() {
     state.serverPaging = false;
+    state.detail = false;
     state.loader = null;
     api('/downloads', function (error, data) {
       if (error) return fail(error);
@@ -261,28 +294,39 @@
           var done = item.status === 'available' || item.status === 'failed';
           return '<li class="download-item"><b>' + esc(item.title) + '</b><div>' + esc(item.author) +
             '</div><span class="muted">' + esc(item.status) + '</span><div class="actions">' +
-            (item.status === 'failed' ? '<button data-download="retry" data-id="' + item.id +
+            (item.status === 'failed' ? '<button data-download="retry" data-id="' + attr(item.id) +
             '">Retry</button>' : '') + '<button data-download="' + (done ? 'remove' : 'cancel') +
-            '" data-id="' + item.id + '">' + (done ? 'Remove' : 'Cancel') + '</button></div></li>';
+            '" data-id="' + attr(item.id) + '">' + (done ? 'Remove' : 'Cancel') + '</button></div></li>';
         }).join('') + '</ul></main>';
       paginate();
     });
   }
   function profile() {
+    var devices;
+    state.detail = false;
     api('/settings', function (error, data) {
       if (error) return fail(error);
+      devices = data.trusted_devices || [];
       filters.innerHTML = '';
       content.innerHTML = '<main><h1>Settings</h1><form id="settings-form"><div class="form-row">' +
-        '<label>Kindle email</label><input name="kindle_email" value="' + esc(data.kindle_email) +
+        '<label>Kindle email</label><input name="kindle_email" value="' + attr(data.kindle_email) +
         '"></div><div class="form-row"><label>Kobo sync</label><select name="kobo_sync_shelf_id">' +
         '<option value="">Disabled</option><option value="all"' +
         (data.kobo_sync_all_books ? ' selected' : '') + '>All books</option>' +
-        data.shelves.map(function (item) { return '<option value="' + item.id + '"' +
+        data.shelves.map(function (item) { return '<option value="' + attr(item.id) + '"' +
           (item.id === data.kobo_sync_shelf_id ? ' selected' : '') + '>' + esc(item.name) +
           '</option>'; }).join('') + '</select></div><button>Save</button> <button type="button" ' +
         'id="kobo-token">' + (data.kobo_configured ? 'Replace' : 'Issue') + ' Kobo token</button>' +
         (data.kobo_configured ? ' <button type="button" id="kobo-revoke">Revoke Kobo token</button>' : '') +
-        '</form><p id="settings-message"></p></main>';
+        '</form><h2>Remembered devices</h2><p class="muted">Remembered for ' +
+        esc(data.trusted_device_days || '') + ' days.</p>' +
+        (devices.length ? devices.map(function (device) {
+          return '<div class="download-item"><b>' + (device.current ? 'This device' : 'Trusted device') +
+            '</b><div>' + esc(device.user_agent) + '</div><span class="muted">Last used ' +
+            esc(device.last_used_at) + '</span><div class="actions"><button data-trusted-device="' +
+            attr(device.id) + '">Forget device</button></div></div>';
+        }).join('') : '<p>No remembered devices.</p>') +
+        '<p id="settings-message"></p></main>';
       state.pages = []; renderPage();
     });
   }
@@ -338,6 +382,9 @@
         esc(error) : 'Kobo endpoint: ' + esc(data.endpoint); });
     if (target.id === 'kobo-revoke') ajax('DELETE', '/api/ereader/settings/kobo-token', null,
       function (error) { if (error) fail(error); else profile(); });
+    if ((value = target.getAttribute('data-trusted-device'))) ajax('DELETE',
+      '/api/ereader/settings/trusted-devices/' + value, null,
+      function (error) { if (error) fail(error); else profile(); });
     if (target.id === 'spa-back') {
       if (state.detail && state.originHash) location.hash = state.originHash;
       else history.back();
@@ -347,15 +394,6 @@
         document.getElementById('book-message').innerHTML = error ? esc(error) : ' Sent to Kindle.';
       });
     if ((value = target.getAttribute('data-page'))) {
-      if (state.detail && value === 'prev' && state.previousId) {
-        location.hash = 'book/' + state.previousId + '?navigation=' + encodeURIComponent(state.navigation);
-        return;
-      }
-      if (state.detail && value === 'next' && state.nextId) {
-        location.hash = 'book/' + state.nextId + '?navigation=' + encodeURIComponent(state.navigation);
-        return;
-      }
-      if (state.detail) return;
       if (value === 'first') {
         if (state.serverPaging && state.page > 1) { state.page = 1; state.loader(); return; }
         state.index = 0;

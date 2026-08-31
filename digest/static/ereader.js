@@ -85,6 +85,32 @@ function marginBottomOf(el) {
     return style ? (parseFloat(style.marginBottom) || 0) : 0;
 }
 
+function pageCapacity(items, container, content) {
+    var available = content.clientHeight - elementTopWithin(container, content) - 8;
+    var columns = parseInt(container.getAttribute('data-columns') || '1', 10);
+    var width = items[0].offsetWidth || 1;
+    var rowTop = null;
+    var rowHeight = 0;
+    var rows = 0;
+    if (columns > 1 && width > 0) {
+        columns = Math.max(1, Math.floor(container.clientWidth / width));
+    }
+    for (var i = 0; i < items.length; i++) {
+        var top = items[i].offsetTop;
+        if (rowTop === null || top !== rowTop) {
+            if (rows && rowHeight && rowHeight > available) break;
+            if (rows) available -= rowHeight;
+            rowTop = top;
+            rowHeight = items[i].offsetHeight + marginBottomOf(items[i]);
+            rows++;
+        } else {
+            rowHeight = Math.max(rowHeight, items[i].offsetHeight + marginBottomOf(items[i]));
+        }
+        if (available - rowHeight < 0) break;
+    }
+    return Math.max(columns, Math.max(1, rows) * columns);
+}
+
 function fitPagedLists() {
     var content = document.getElementById('shell-content');
     var container = document.getElementsByClassName('js-paginated')[0];
@@ -94,15 +120,7 @@ function fitPagedLists() {
         return;
     }
     var items = container.children;
-    var first = items[0];
-    var available = content.clientHeight - elementTopWithin(container, content) - 8;
-    var itemHeight = first.offsetHeight + marginBottomOf(first);
-    var columns = parseInt(container.getAttribute('data-columns') || '1', 10);
-    if (columns > 1 && first.offsetWidth > 0) {
-        columns = Math.max(1, Math.floor(container.clientWidth / first.offsetWidth));
-    }
-    var rowsFit = Math.max(1, Math.floor(available / (itemHeight || 1)));
-    var perPage = Math.max(columns, rowsFit * columns);
+    var perPage = pageCapacity(items, container, content);
     var page = pagedListState && pagedListState.container === container ? pagedListState.page : 0;
     pagedListState = {
         container: container,
