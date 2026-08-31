@@ -46,6 +46,13 @@
   }
   function api(path, done) { ajax('GET', '/api/ereader' + path, null, done); }
   function fail(error) { content.innerHTML = '<main><p class="error">' + esc(error) + '</p></main>'; }
+  function setFontSize(size) {
+    var html = document.documentElement;
+    html.className = html.className.replace(/\bfs-(sm|lg)\b/g, '').replace(/\s+/g, ' ').replace(/^\s+|\s+$/g, '');
+    if (size === 'sm' || size === 'lg') html.className = (html.className + ' fs-' + size).replace(/^\s+/, '');
+    document.cookie = 'fs=' + size + ';path=/;max-age=31536000;samesite=lax';
+    paginate();
+  }
   function moreByAuthor(author) {
     if (!author) return '';
     return '<a href="#author?author=' + encodeURIComponent(author) + '">More by this author</a>';
@@ -382,6 +389,7 @@
     if ((value = target.getAttribute('data-shelf-book'))) ajax(target.getAttribute('data-method'),
       '/api/ereader/shelves/' + value + '/books/' + target.getAttribute('data-book'), null,
       function (error) { if (error) fail(error); else book(target.getAttribute('data-book')); });
+    if ((value = target.getAttribute('data-fontsize'))) setFontSize(value);
     if (target.id === 'menu-toggle') { value = document.getElementById('spa-menu');
       value.className = value.className ? '' : 'hidden'; }
     if (target.id === 'search-toggle') { value = document.getElementById('spa-search');
