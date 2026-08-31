@@ -24,6 +24,7 @@ from digest.kobo import (
     update_reading_state,
     update_tag,
 )
+from digest.main import app
 from digest.models import (
     Book,
     BookFile,
@@ -38,6 +39,13 @@ from digest.models import (
 )
 from digest.security import KOBO_TOKEN_NAME, current_user, hash_password
 from digest.tokens import create_token
+
+
+def test_kobo_device_normalized_download_route_is_registered() -> None:
+    assert any(
+        getattr(route, "path", None) == "/kobo/{token}/{book_id}/{book_format}"
+        for route in app.routes
+    )
 
 
 def kobo_session() -> Session:

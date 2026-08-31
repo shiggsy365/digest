@@ -2207,6 +2207,7 @@ def kobo_remove_collection_items(
 
 @app.get("/kobo/{token}/download/{book_id}")
 @app.get("/kobo/{token}/download/{book_id}/{book_format}")
+@app.get("/kobo/{token}/{book_id}/{book_format}")
 def kobo_download(
     token: str,
     book_id: str,
