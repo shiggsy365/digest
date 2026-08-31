@@ -51,6 +51,28 @@
     html.className = html.className.replace(/\bfs-(sm|lg)\b/g, '').replace(/\s+/g, ' ').replace(/^\s+|\s+$/g, '');
     if (size === 'sm' || size === 'lg') html.className = (html.className + ' fs-' + size).replace(/^\s+/, '');
     document.cookie = 'fs=' + size + ';path=/;max-age=31536000;samesite=lax';
+    fitShell();
+  }
+  function setFontFamily(family) {
+    var html = document.documentElement;
+    html.className = html.className.replace(/\bff-sans\b/g, '').replace(/\s+/g, ' ').replace(/^\s+|\s+$/g, '');
+    if (family === 'sans') html.className = (html.className + ' ff-sans').replace(/^\s+/, '');
+    document.cookie = 'ff=' + family + ';path=/;max-age=31536000;samesite=lax';
+    fitShell();
+  }
+  function fitShell() {
+    var h = window.innerHeight || document.documentElement.clientHeight;
+    var nav = document.getElementById('spa-nav');
+    var pager = document.getElementById('spa-pager');
+    var main = content.querySelector('main');
+    var used, contentH;
+    if (!h) return paginate();
+    used = (nav ? nav.offsetHeight : 0) + (filters ? filters.offsetHeight : 0) +
+      (pager ? pager.offsetHeight : 0);
+    contentH = h - used;
+    contentH = contentH > 80 ? contentH : 80;
+    content.style.height = contentH + 'px';
+    if (main) main.style.height = contentH + 'px';
     paginate();
   }
   function moreByAuthor(author) {
@@ -84,7 +106,8 @@
       (book.series_number ? ' #' + esc(book.series_number) : '') : '') + badge + '</p></div></article>';
   }
   function pageSizeFor(list, fallback) {
-    var contentHeight = content.clientHeight || 0;
+    var main = content.querySelector('main');
+    var contentHeight = (main && main.clientHeight) || content.clientHeight || 0;
     var available = contentHeight - (list ? list.offsetTop : 0) - 8;
     var item = list && list.children && list.children.length ? list.children[0] : null;
     var height = item ? item.offsetHeight : 0;
@@ -115,9 +138,10 @@
   }
   function paginate() {
     var list = content.querySelector('[data-paginate]');
+    var isBookList = list && list.className.indexOf('book-list') !== -1;
     var size = parseInt(list && list.getAttribute('data-page-size'), 10) ||
-      (list && list.className.indexOf('book-list') !== -1 ? 6 :
-      pageSizeFor(list, state.serverPaging ? state.pageSize : 6)), i;
+      pageSizeFor(list, state.serverPaging ? state.pageSize : 6), i;
+    if (isBookList) size = Math.max(3, Math.min(8, size));
     state.pages = [];
     state.index = 0;
     if (list && list.children.length) {
@@ -136,7 +160,7 @@
       '</h1><div class="book-list" data-paginate>' +
       (items.length ? items.map(row).join('') : '<p class="empty">No books to show here yet.</p>') +
       '</div></main>';
-    paginate();
+    fitShell();
   }
   function library(extra) {
     var labels = {latest: 'Latest books', reading: 'Currently reading', favourites: 'Favourites',
@@ -147,7 +171,7 @@
     state.serverPaging = true;
     state.loader = function () { library(); };
     state.navigation = 'library?q=' + encodeURIComponent(state.query) + state.libraryExtra;
-    api('/library?page_size=6&page=' + state.page + '&q=' + encodeURIComponent(state.query) +
+    api('/library?page_size=24&page=' + state.page + '&q=' + encodeURIComponent(state.query) +
       state.libraryExtra,
       function (error, data) {
         if (error) return fail(error);
@@ -177,7 +201,7 @@
             attr(item.name) + '"><strong>' + esc(item.name) + '</strong><span>' +
             item.count + (item.count === 1 ? ' book' : ' books') + '</span></button>';
         }).join('') + '</div></main>';
-      paginate();
+      fitShell();
     });
   }
   function discover(group) {
@@ -235,12 +259,12 @@
           item.id + '">' + esc(item.name) + '</a> <span class="muted">(' + item.count +
           ')</span> <button data-delete-shelf="' + item.id + '">Delete</button></li>'; }).join('') +
         '</ul></main>';
-      paginate();
+      fitShell();
     });
   }
   function shelf(id) { state.serverPaging = true; state.loader = function () { shelf(id); };
     state.navigation = 'shelf:' + id;
-    api('/shelves/' + id + '?page_size=6&page=' + state.page, function (error, data) {
+    api('/shelves/' + id + '?page_size=24&page=' + state.page, function (error, data) {
     if (error) return fail(error); state.more = data.has_more; state.total = data.total;
     state.pageSize = data.page_size; showBooks(data.shelf.name, data.items);
   }); }
@@ -269,7 +293,7 @@
         pages.map(function (part) { return '<div class="description-page">' + esc(part) + '</div>'; }).join('') +
         '</div><div class="actions">' + actions +
         '<span id="book-message"></span></div></main>';
-      paginate();
+      fitShell();
     });
   }
   function discoveryBook(query) {
@@ -296,7 +320,7 @@
         '</div>' +
         '<div class="actions">' + moreByAuthor(data.author) + target +
         '<span id="book-message"></span></div></main>';
-      paginate();
+      fitShell();
     });
   }
   function downloads() {
@@ -315,7 +339,7 @@
             '">Retry</button>' : '') + '<button data-download="' + (done ? 'remove' : 'cancel') +
             '" data-id="' + attr(item.id) + '">' + (done ? 'Remove' : 'Cancel') + '</button></div></li>';
         }).join('') + '</ul></main>';
-      paginate();
+      fitShell();
     });
   }
   function profile() {
@@ -344,7 +368,7 @@
             attr(device.id) + '">Forget device</button></div></div>';
         }).join('') : '<p>No remembered devices.</p>') +
         '<p id="settings-message"></p></main>';
-      state.pages = []; renderPage();
+      fitShell();
     });
   }
   function route() {
@@ -390,6 +414,7 @@
       '/api/ereader/shelves/' + value + '/books/' + target.getAttribute('data-book'), null,
       function (error) { if (error) fail(error); else book(target.getAttribute('data-book')); });
     if ((value = target.getAttribute('data-fontsize'))) setFontSize(value);
+    if ((value = target.getAttribute('data-fontfamily'))) setFontFamily(value);
     if (target.id === 'menu-toggle') { value = document.getElementById('spa-menu');
       value.className = value.className ? '' : 'hidden'; }
     if (target.id === 'search-toggle') { value = document.getElementById('spa-search');
@@ -458,6 +483,6 @@
       {name: form.elements.name.value}, function (error) { if (error) fail(error); else shelves(); }); }
   });
   window.onhashchange = route;
-  window.onresize = paginate;
+  window.onresize = fitShell;
   route();
 }());
