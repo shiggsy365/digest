@@ -48,6 +48,29 @@ function toggleNavSearch() {
     fitDigestShell();
 }
 
+function setFontSize(size) {
+    var html = document.documentElement;
+    removeClass(html, 'fs-sm');
+    removeClass(html, 'fs-lg');
+    if (size === 'sm' || size === 'lg') addClass(html, 'fs-' + size);
+    document.cookie = 'fs=' + size + ';path=/;max-age=31536000;samesite=lax';
+    fitDigestShell();
+}
+
+function toggleSortBar() {
+    var bar = document.getElementById('sort-bar');
+    var btn = document.getElementById('sort-toggle-btn');
+    if (!bar) return;
+    if (hasClass(bar, 'hidden')) {
+        removeClass(bar, 'hidden');
+        if (btn) btn.setAttribute('aria-expanded', 'true');
+    } else {
+        addClass(bar, 'hidden');
+        if (btn) btn.setAttribute('aria-expanded', 'false');
+    }
+    fitDigestShell();
+}
+
 function toggleBurgerMenu() {
     var menu = document.getElementById('burger-menu');
     if (!menu) return;
