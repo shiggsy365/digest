@@ -660,7 +660,9 @@ def sync_pending(db: Session, user: User) -> bool:
     )
 
 
-def initialization(base_url: str, token: str) -> dict:
+def initialization(
+    base_url: str, token: str, upstream_resources: dict | None = None
+) -> dict:
     """Return Kobo endpoints rooted at Digest's configured public URL.
 
     Kobo continues to use these URLs after the initial request. Building them
@@ -669,6 +671,17 @@ def initialization(base_url: str, token: str) -> dict:
     """
     base_url = base_url.rstrip("/")
     device_base = f"{base_url}/kobo/{token}"
+    if upstream_resources:
+        resources = dict(upstream_resources)
+        resources.update(
+            {
+                "image_host": base_url,
+                "image_url_template": f"{device_base}/cover/{{ImageId}}/{{Width}}/{{Height}}/false/image.jpg",
+                "image_url_quality_template": f"{device_base}/cover/{{ImageId}}/{{Width}}/{{Height}}/{{Quality}}/{{IsGreyscale}}/image.jpg",
+                "library_sync": f"{device_base}/v1/library/sync",
+            }
+        )
+        return {"Resources": resources}
     return {
         "Resources": {
             "account_page": "https://www.kobo.com/account/settings",

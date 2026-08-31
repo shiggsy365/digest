@@ -132,6 +132,25 @@ def test_initialization_routes_library_operations_to_configured_public_url() -> 
     assert resources["configuration_data"].startswith("https://storeapi.kobo.com/")
 
 
+def test_initialization_preserves_full_upstream_resources_and_overrides_sync_urls() -> None:
+    resources = initialization(
+        "https://digest.example",
+        "secret",
+        {
+            "library_sync": "https://storeapi.kobo.com/v1/library/sync",
+            "new_firmware_resource": "https://storeapi.kobo.com/v2/new-resource",
+            "device_auth": "https://storeapi.kobo.com/v1/auth/device",
+        },
+    )["Resources"]
+
+    assert resources["library_sync"] == (
+        "https://digest.example/kobo/secret/v1/library/sync"
+    )
+    assert resources["new_firmware_resource"].endswith("/v2/new-resource")
+    assert resources["device_auth"].startswith("https://storeapi.kobo.com/")
+    assert "{Width}" in resources["image_url_template"]
+
+
 def test_sync_contains_only_compatible_books_on_selected_shelf(tmp_path: Path) -> None:
     with kobo_session() as db:
         user = make_user(db)

@@ -2057,7 +2057,31 @@ def revoke_kobo_token(
 @app.get("/kobo/{token}/v1/initialization")
 def kobo_initialize(token: str, request: Request, db: Annotated[Session, Depends(get_db)]):
     kobo_user(db, token)
-    response = JSONResponse(kobo_initialization(settings.public_url, token))
+    proxy_headers = {
+        name: value
+        for name, value in request.headers.items()
+        if name in {"authorization", "user-agent", "accept", "accept-language"}
+        or (name.startswith("x-kobo-") and name != "x-kobo-synctoken")
+    }
+    upstream_resources = None
+    try:
+        upstream = httpx.get(
+            "https://storeapi.kobo.com/v1/initialization",
+            headers=proxy_headers,
+            params=request.query_params,
+            timeout=20,
+        )
+        upstream.raise_for_status()
+        upstream_body = upstream.json()
+        if isinstance(upstream_body, dict) and isinstance(
+            upstream_body.get("Resources"), dict
+        ):
+            upstream_resources = upstream_body["Resources"]
+    except (httpx.HTTPError, ValueError):
+        pass
+    response = JSONResponse(
+        kobo_initialization(settings.public_url, token, upstream_resources)
+    )
     response.headers["x-kobo-apitoken"] = "e30="
     return response
 
