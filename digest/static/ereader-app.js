@@ -1,7 +1,7 @@
 (function () {
   'use strict';
   var state = {page: 1, pages: [], index: 0, more: false, query: '', libraryExtra: '',
-    total: 0, pageSize: 40, pendingLast: false, discoveryListing: false, serverPaging: false,
+    total: 0, pageSize: 6, pendingLast: false, discoveryListing: false, serverPaging: false,
     loader: null, navigation: '', detail: false, previousId: null, nextId: null, lastHash: '',
     originHash: ''};
   var content = document.getElementById('spa-content');
@@ -109,7 +109,8 @@
   function paginate() {
     var list = content.querySelector('[data-paginate]');
     var size = parseInt(list && list.getAttribute('data-page-size'), 10) ||
-      pageSizeFor(list, state.serverPaging ? state.pageSize : 6), i;
+      (list && list.className.indexOf('book-list') !== -1 ? 6 :
+      pageSizeFor(list, state.serverPaging ? state.pageSize : 6)), i;
     state.pages = [];
     state.index = 0;
     if (list && list.children.length) {
@@ -139,7 +140,7 @@
     state.serverPaging = true;
     state.loader = function () { library(); };
     state.navigation = 'library?q=' + encodeURIComponent(state.query) + state.libraryExtra;
-    api('/library?page_size=40&page=' + state.page + '&q=' + encodeURIComponent(state.query) +
+    api('/library?page_size=6&page=' + state.page + '&q=' + encodeURIComponent(state.query) +
       state.libraryExtra,
       function (error, data) {
         if (error) return fail(error);
@@ -232,7 +233,7 @@
   }
   function shelf(id) { state.serverPaging = true; state.loader = function () { shelf(id); };
     state.navigation = 'shelf:' + id;
-    api('/shelves/' + id + '?page_size=40&page=' + state.page, function (error, data) {
+    api('/shelves/' + id + '?page_size=6&page=' + state.page, function (error, data) {
     if (error) return fail(error); state.more = data.has_more; state.total = data.total;
     state.pageSize = data.page_size; showBooks(data.shelf.name, data.items);
   }); }

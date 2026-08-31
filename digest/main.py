@@ -744,7 +744,7 @@ def library(
     selected_direction = (
         direction if direction in {"asc", "desc"} else default_sort_direction(selected_sort)
     )
-    page_size = 32 if is_ereader_request(request) else 24
+    page_size = 6 if is_ereader_request(request) else 24
     last_page = 1
     if filtered:
         result_count = db.scalar(select(func.count()).select_from(query.subquery())) or 0
@@ -824,7 +824,7 @@ def library(
         .group_by(Book.series)
         .order_by(func.lower(Book.series))
     )
-    directory_page_size = 32 if is_ereader_request(request) else 48
+    directory_page_size = 24 if is_ereader_request(request) else 48
     if directory_view == "authors":
         author_results = db.execute(
             author_query.offset((page - 1) * directory_page_size).limit(directory_page_size + 1)
@@ -1688,7 +1688,7 @@ def shelf_detail(
     page = max(page, 1)
     ordered_query = query.order_by(*book_order(selected_sort, selected_direction), Book.id)
     total = db.scalar(select(func.count()).select_from(query.subquery())) or 0
-    page_size = 32
+    page_size = 6 if is_ereader_request(request) else 24
     if is_ereader_request(request):
         results = list(db.scalars(ordered_query.offset((page - 1) * page_size).limit(page_size + 1)))
         books, has_next = results[:page_size], len(results) > page_size

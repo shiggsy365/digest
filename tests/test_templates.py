@@ -39,7 +39,7 @@ def test_ereader_static_assets_keep_eink_layout_contract() -> None:
     assert "prefers-color-scheme:dark" not in ereader_css
     assert "prefers-color-scheme:dark" not in spa_css
     assert "function pageSizeFor" in spa_js
-    assert "page_size=40" in spa_js
+    assert "page_size=6" in spa_js
     assert "description-page" in spa_js
     assert "id=\"pg-back\"" in ereader_base
     assert "id=\"spa-back\"" in spa_base

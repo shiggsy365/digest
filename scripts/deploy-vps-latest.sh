@@ -17,7 +17,7 @@ Pull the latest Digest release on the VPS, update the compose version pin, and
 recreate the Digest services.
 
 Options:
-  --version VERSION     Deploy a specific version or tag, e.g. 1.0.25 or v1.0.25
+  --version VERSION     Deploy a specific version or tag, e.g. 1.0.26 or v1.0.26
   --host HOST           SSH host, default: ${HOST}
   --remote-dir DIR      Compose project directory, default: ${REMOTE_DIR}
   --env-file PATH       Env file relative to remote dir, default: ${ENV_FILE}

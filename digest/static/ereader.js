@@ -120,7 +120,8 @@ function fitPagedLists() {
         return;
     }
     var items = container.children;
-    var perPage = pageCapacity(items, container, content);
+    var perPage = container.className.indexOf('book-list') !== -1 ?
+        6 : pageCapacity(items, container, content);
     var page = pagedListState && pagedListState.container === container ? pagedListState.page : 0;
     pagedListState = {
         container: container,

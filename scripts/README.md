@@ -15,7 +15,7 @@ Digest migration/web/worker services, and checks `/healthz`.
 Deploy a specific version:
 
 ```bash
-./scripts/deploy-vps-latest.sh --version 1.0.25
+./scripts/deploy-vps-latest.sh --version 1.0.26
 ```
 
 Useful overrides:
