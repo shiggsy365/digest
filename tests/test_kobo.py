@@ -21,6 +21,7 @@ from digest.kobo import (
     shelf_tag_id,
     sync_payload,
     sync_pending,
+    sync_token,
     update_reading_state,
     update_tag,
 )
@@ -46,6 +47,21 @@ def test_kobo_device_normalized_download_route_is_registered() -> None:
         getattr(route, "path", None) == "/kobo/{token}/{book_id}/{book_format}"
         for route in app.routes
     )
+
+
+def test_kobo_native_download_route_is_registered() -> None:
+    assert any(
+        getattr(route, "path", None) == "/kobo/{token}/v1/books/{book_id}/download"
+        for route in app.routes
+    )
+
+
+def test_digest_sync_token_is_stable_and_replaces_foreign_tokens() -> None:
+    generated = sync_token()
+
+    assert generated.startswith("DIGEST.")
+    assert sync_token(generated) == generated
+    assert sync_token("foreign.token") == generated
 
 
 def kobo_session() -> Session:
@@ -157,8 +173,9 @@ def test_sync_contains_only_compatible_books_on_selected_shelf(tmp_path: Path) -
         assert payload["BookMetadata"]["Title"] == "Bee Speaker"
         assert payload["BookMetadata"]["Series"]["Number"] == 3
         assert payload["BookMetadata"]["DownloadUrls"][0]["Format"] == "KEPUB"
+        assert payload["BookMetadata"]["DownloadUrls"][0]["DrmType"] == "None"
         assert payload["BookMetadata"]["DownloadUrls"][0]["Url"].endswith(
-            f"/download/{included.id}/kepub"
+            f"/v1/books/{included.id}/download"
         )
         assert payload["ReadingState"]["StatusInfo"]["Status"] == "ReadyToRead"
         assert excluded.id not in json.dumps(result)
@@ -219,18 +236,18 @@ def test_large_backlog_is_spread_across_multiple_syncs(tmp_path: Path) -> None:
         db.commit()
 
         first = sync_payload(db, user, "https://digest.example", "secret")
-        assert len(first) == 50
-        assert db.query(KoboSyncedBook).count() == 50
+        assert len(first) == 5
+        assert db.query(KoboSyncedBook).count() == 5
         assert sync_pending(db, user) is True
 
-        second = sync_payload(db, user, "https://digest.example", "secret")
-        assert len(second) == 50
-        assert db.query(KoboSyncedBook).count() == 100
+        batch_count = 1
+        while sync_pending(db, user):
+            batch = sync_payload(db, user, "https://digest.example", "secret")
+            assert 1 <= len(batch) <= 5
+            batch_count += 1
 
-        third = sync_payload(db, user, "https://digest.example", "secret")
-        assert len(third) == book_count - 100
+        assert batch_count == book_count // 5
         assert db.query(KoboSyncedBook).count() == book_count
-        assert sync_pending(db, user) is False
 
         assert sync_payload(db, user, "https://digest.example", "secret") == []
 

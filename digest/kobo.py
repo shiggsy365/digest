@@ -1,3 +1,4 @@
+import base64
 import hashlib
 import json
 import secrets
@@ -30,7 +31,20 @@ from .security import KOBO_TOKEN_NAME, token_digest
 # books with changed metadata) a single sync call builds; a large backlog -
 # for example right after a token refresh wipes all sync tracking - is spread
 # across several sync calls instead of one huge response.
-MAX_ENTITLEMENTS_PER_SYNC = 50
+MAX_ENTITLEMENTS_PER_SYNC = 5
+
+
+def sync_token(existing: str | None = None) -> str:
+    """Return Digest's opaque Kobo sync cursor.
+
+    Per-book delivery state lives in the database, so the cursor only needs to
+    identify this server's token format. Kobo nevertheless requires the header
+    on every sync response, including the final page.
+    """
+    if existing and existing.startswith("DIGEST."):
+        return existing
+    payload = base64.b64encode(b'{"version":1}').decode().rstrip("=")
+    return f"DIGEST.{payload}"
 
 
 def kobo_user(db: Session, token: str) -> User:
@@ -148,12 +162,13 @@ def metadata(book: Book, base_url: str, token: str) -> dict:
     item = preferred_file(book)
     download_urls = []
     if item:
-        kobo_formats = ["KEPUB"] if item.format == "kepub" else ["EPUB3", "EPUB"]
+        kobo_formats = ["KEPUB"] if item.format == "kepub" else ["EPUB3"]
         download_urls = [
             {
+                "DrmType": "None",
                 "Format": book_format,
                 "Size": item.size_bytes,
-                "Url": f"{base_url}/kobo/{token}/download/{book.id}/{item.format}",
+                "Url": f"{base_url}/kobo/{token}/v1/books/{book.id}/download",
                 "Platform": "Generic",
             }
             for book_format in kobo_formats
