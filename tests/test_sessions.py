@@ -224,9 +224,42 @@ def test_login_on_ereader_redirects_to_bookmarkable_landing_page() -> None:
         assert response.status_code == 303
         location = response.headers["location"]
         assert location.startswith("/trusted-device/dtd_")
+        assert location.endswith("?welcome=1")
 
 
-def test_trusted_device_landing_authenticates_and_shows_bookmark_url() -> None:
+def test_trusted_device_landing_with_welcome_param_shows_bookmark_url() -> None:
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    with Session(engine, expire_on_commit=False) as db:
+        user = User(
+            username="reader",
+            password_hash=hash_password("long-test-password"),
+            role=Role.USER,
+        )
+        db.add(user)
+        db.commit()
+        _, token = create_trusted_device(db, user, "Kobo Touch")
+        db.commit()
+
+        request = Request({
+            "type": "http",
+            "method": "GET",
+            "path": f"/trusted-device/{token}",
+            "headers": [(b"user-agent", b"Mozilla/5.0 (Kobo Touch 0390/4.45.23697)")],
+            "query_string": b"welcome=1",
+            "session": {},
+        })
+
+        response = trusted_device_landing(token, request, db)
+        html = response.body.decode()
+
+        assert response.status_code == 200
+        assert request.session["user_id"] == user.id
+        assert token in html
+        assert _set_cookie_header(response).startswith(f"{TRUSTED_DEVICE_COOKIE}={token}".encode())
+
+
+def test_trusted_device_landing_without_welcome_param_redirects_to_library() -> None:
     engine = create_engine("sqlite:///:memory:")
     Base.metadata.create_all(engine)
     with Session(engine, expire_on_commit=False) as db:
@@ -250,11 +283,10 @@ def test_trusted_device_landing_authenticates_and_shows_bookmark_url() -> None:
         })
 
         response = trusted_device_landing(token, request, db)
-        html = response.body.decode()
 
-        assert response.status_code == 200
+        assert response.status_code == 303
+        assert response.headers["location"] == "/"
         assert request.session["user_id"] == user.id
-        assert token in html
         assert _set_cookie_header(response).startswith(f"{TRUSTED_DEVICE_COOKIE}={token}".encode())
 
 

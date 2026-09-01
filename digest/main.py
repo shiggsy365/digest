@@ -650,7 +650,10 @@ def login(
         # Cookies don't reliably survive a full restart on some e-reader browsers, so
         # send them to the bookmarkable magic-link landing page instead of "/" -- its
         # own URL is the credential, so it works even with no cookie storage at all.
-        response = RedirectResponse(f"/trusted-device/{bookmark_token}", 303)
+        # welcome=1 marks this as the first visit so the landing page shows the
+        # bookmark instructions once; opening the bookmarked URL plain afterwards
+        # (e.g. as a browser home page) skips straight to the library.
+        response = RedirectResponse(f"/trusted-device/{bookmark_token}?welcome=1", 303)
     else:
         response = RedirectResponse("/", 303)
     if remember_me:
@@ -681,15 +684,18 @@ def trusted_device_landing(token: str, request: Request, db: Annotated[Session, 
     request.session.clear()
     request.session["user_id"] = user.id
     request.session["remember_me"] = True
-    response = templates.TemplateResponse(
-        request,
-        "ereader/trusted_device_bookmark.html",
-        {
-            "user": user,
-            "csrf": csrf(request),
-            "bookmark_url": f"{settings.public_url}/trusted-device/{token}",
-        },
-    )
+    if request.query_params.get("welcome") == "1":
+        response = templates.TemplateResponse(
+            request,
+            "ereader/trusted_device_bookmark.html",
+            {
+                "user": user,
+                "csrf": csrf(request),
+                "bookmark_url": f"{settings.public_url}/trusted-device/{token}",
+            },
+        )
+    else:
+        response = RedirectResponse("/", 303)
     set_trusted_device_cookie(request, response, token)
     return response
 
