@@ -57,6 +57,14 @@ def create_trusted_device(db: Session, user: User, user_agent: str) -> tuple[Tru
 def trusted_device_from_request(request: Request, db: Session) -> TrustedDevice | None:
     token = request.cookies.get(TRUSTED_DEVICE_COOKIE, "")
     if not token.startswith("dtd_"):
+        # TEMPORARY diagnostic: confirm whether the browser is sending the cookie
+        # back at all. Logs cookie *names* and a hash prefix only, never a raw token.
+        print(
+            f"[trusted-device-debug] {request.method} {request.url.path} "
+            f"no trusted-device cookie; cookies present: {sorted(request.cookies.keys())}; "
+            f"raw Cookie header: {request.headers.get('cookie', '<absent>')!r}",
+            flush=True,
+        )
         return None
     device = db.scalar(
         select(TrustedDevice).where(
@@ -65,6 +73,11 @@ def trusted_device_from_request(request: Request, db: Session) -> TrustedDevice 
         )
     )
     if not device:
+        print(
+            f"[trusted-device-debug] {request.method} {request.url.path} "
+            f"cookie present but no matching active device (hash prefix {token_digest(token)[:12]})",
+            flush=True,
+        )
         return None
     user = db.get(User, device.user_id)
     if not user or not user.is_active:
