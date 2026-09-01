@@ -249,28 +249,31 @@ def check_csrf(request: Request, value: str) -> None:
         raise HTTPException(status_code=403, detail="Invalid form token")
 
 
-def trusted_device_cookie_options() -> dict:
+def trusted_device_cookie_options(request: Request) -> dict:
     # Some e-reader browsers ignore Max-Age and treat the cookie as session-only
     # unless an explicit Expires date is also present (see _session_cookie_lifetime).
+    # Ancient e-reader WebKit builds predate the SameSite attribute and can drop a
+    # cookie outright rather than ignore an attribute they don't recognise, so leave
+    # it off for them -- the app's CSRF token already covers what SameSite would.
     seconds = settings.trusted_device_days * 86400
     return {
         "max_age": seconds,
         "expires": seconds,
         "httponly": True,
-        "samesite": "lax",
+        "samesite": None if is_ereader_request(request) else "lax",
         "secure": settings.public_url.startswith("https://"),
     }
 
 
-def set_trusted_device_cookie(response: Response, token: str) -> None:
-    response.set_cookie(TRUSTED_DEVICE_COOKIE, token, **trusted_device_cookie_options())
+def set_trusted_device_cookie(request: Request, response: Response, token: str) -> None:
+    response.set_cookie(TRUSTED_DEVICE_COOKIE, token, **trusted_device_cookie_options(request))
 
 
-def clear_trusted_device_cookie(response: Response) -> None:
+def clear_trusted_device_cookie(request: Request, response: Response) -> None:
     response.delete_cookie(
         TRUSTED_DEVICE_COOKIE,
         path="/",
-        samesite="lax",
+        samesite=None if is_ereader_request(request) else "lax",
         secure=settings.public_url.startswith("https://"),
     )
 
@@ -628,12 +631,12 @@ def login(
         existing_device = current_trusted_device(request, db, user) if existing_token else None
         if existing_device:
             existing_device.last_used_at = datetime.now(UTC)
-            set_trusted_device_cookie(response, existing_token)
+            set_trusted_device_cookie(request, response, existing_token)
         else:
             trusted_device, trusted_token = create_trusted_device(
                 db, user, request.headers.get("user-agent", "")
             )
-            set_trusted_device_cookie(response, trusted_token)
+            set_trusted_device_cookie(request, response, trusted_token)
             db.add(
                 AuditEvent(
                     event="trusted_device_created",
@@ -645,7 +648,7 @@ def login(
         existing_device = current_trusted_device(request, db, user)
         if existing_device:
             revoke_trusted_device(db, existing_device)
-        clear_trusted_device_cookie(response)
+        clear_trusted_device_cookie(request, response)
     db.add(AuditEvent(event="login", user_id=user.id, message="Login successful"))
     db.commit()
     return response
@@ -664,7 +667,7 @@ def logout(
     db.commit()
     request.session.clear()
     response = RedirectResponse("/login", 303)
-    clear_trusted_device_cookie(response)
+    clear_trusted_device_cookie(request, response)
     return response
 
 
@@ -2189,7 +2192,7 @@ def revoke_trusted_device_route(
     response = RedirectResponse("/settings", 303)
     current = request.cookies.get(TRUSTED_DEVICE_COOKIE, "")
     if current and token_digest(current) == device.token_hash:
-        clear_trusted_device_cookie(response)
+        clear_trusted_device_cookie(request, response)
     return response
 
 

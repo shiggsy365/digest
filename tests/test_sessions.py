@@ -138,13 +138,49 @@ def test_login_with_remember_me_reuses_the_current_trusted_device() -> None:
         assert [item.id for item in active] == [device.id]
 
 
-def test_trusted_device_cookie_has_legacy_compatible_expiry() -> None:
-    response = Response()
+def _cookie_request(user_agent: bytes) -> Request:
+    return Request({
+        "type": "http",
+        "method": "POST",
+        "path": "/login",
+        "headers": [(b"user-agent", user_agent)],
+        "query_string": b"",
+        "session": {},
+    })
 
-    set_trusted_device_cookie(response, "dtd_example-token")
 
+def _set_cookie_header(response: Response) -> bytes:
     (value,) = [
         value for name, value in response.raw_headers if name.lower() == b"set-cookie"
     ]
+    return value
+
+
+def test_trusted_device_cookie_has_legacy_compatible_expiry() -> None:
+    response = Response()
+
+    set_trusted_device_cookie(_cookie_request(b"Mozilla/5.0 Chrome"), response, "dtd_example-token")
+
+    value = _set_cookie_header(response)
     assert b"Max-Age=" in value
     assert b"expires=" in value.lower()
+
+
+def test_trusted_device_cookie_drops_samesite_for_ereader_browsers() -> None:
+    response = Response()
+
+    set_trusted_device_cookie(
+        _cookie_request(b"Mozilla/5.0 (Kobo Touch 0390/4.45.23697)"), response, "dtd_example-token"
+    )
+
+    value = _set_cookie_header(response)
+    assert b"samesite" not in value.lower()
+
+
+def test_trusted_device_cookie_keeps_samesite_for_regular_browsers() -> None:
+    response = Response()
+
+    set_trusted_device_cookie(_cookie_request(b"Mozilla/5.0 Chrome"), response, "dtd_example-token")
+
+    value = _set_cookie_header(response)
+    assert b"samesite=lax" in value.lower()
