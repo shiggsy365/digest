@@ -250,8 +250,12 @@ def check_csrf(request: Request, value: str) -> None:
 
 
 def trusted_device_cookie_options() -> dict:
+    # Some e-reader browsers ignore Max-Age and treat the cookie as session-only
+    # unless an explicit Expires date is also present (see _session_cookie_lifetime).
+    seconds = settings.trusted_device_days * 86400
     return {
-        "max_age": settings.trusted_device_days * 86400,
+        "max_age": seconds,
+        "expires": seconds,
         "httponly": True,
         "samesite": "lax",
         "secure": settings.public_url.startswith("https://"),

@@ -2,9 +2,10 @@ from fastapi import HTTPException
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session
 from starlette.requests import Request
+from starlette.responses import Response
 
 from digest.db import Base
-from digest.main import _session_cookie_lifetime, login
+from digest.main import _session_cookie_lifetime, login, set_trusted_device_cookie
 from digest.models import Role, TrustedDevice, User
 from digest.security import (
     TRUSTED_DEVICE_COOKIE,
@@ -135,3 +136,15 @@ def test_login_with_remember_me_reuses_the_current_trusted_device() -> None:
             )
         ).all()
         assert [item.id for item in active] == [device.id]
+
+
+def test_trusted_device_cookie_has_legacy_compatible_expiry() -> None:
+    response = Response()
+
+    set_trusted_device_cookie(response, "dtd_example-token")
+
+    (value,) = [
+        value for name, value in response.raw_headers if name.lower() == b"set-cookie"
+    ]
+    assert b"Max-Age=" in value
+    assert b"expires=" in value.lower()
