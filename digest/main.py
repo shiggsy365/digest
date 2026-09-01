@@ -624,19 +624,19 @@ def login(
         )
     request.session.clear()
     request.session["user_id"] = user.id
-    response = RedirectResponse("/", 303)
+    bookmark_token: str | None = None
     if remember_me:
         request.session["remember_me"] = True
         existing_token = request.cookies.get(TRUSTED_DEVICE_COOKIE, "")
         existing_device = current_trusted_device(request, db, user) if existing_token else None
         if existing_device:
             existing_device.last_used_at = datetime.now(UTC)
-            set_trusted_device_cookie(request, response, existing_token)
+            bookmark_token = existing_token
         else:
             trusted_device, trusted_token = create_trusted_device(
                 db, user, request.headers.get("user-agent", "")
             )
-            set_trusted_device_cookie(request, response, trusted_token)
+            bookmark_token = trusted_token
             db.add(
                 AuditEvent(
                     event="trusted_device_created",
@@ -644,13 +644,53 @@ def login(
                     message=f"Remembered trusted device {trusted_device.id}",
                 )
             )
+    db.add(AuditEvent(event="login", user_id=user.id, message="Login successful"))
+    db.commit()
+    if bookmark_token and is_ereader_request(request):
+        # Cookies don't reliably survive a full restart on some e-reader browsers, so
+        # send them to the bookmarkable magic-link landing page instead of "/" -- its
+        # own URL is the credential, so it works even with no cookie storage at all.
+        response = RedirectResponse(f"/trusted-device/{bookmark_token}", 303)
+    else:
+        response = RedirectResponse("/", 303)
+    if remember_me:
+        set_trusted_device_cookie(request, response, bookmark_token)
     else:
         existing_device = current_trusted_device(request, db, user)
         if existing_device:
             revoke_trusted_device(db, existing_device)
         clear_trusted_device_cookie(request, response)
-    db.add(AuditEvent(event="login", user_id=user.id, message="Login successful"))
+    return response
+
+
+@app.get("/trusted-device/{token}", response_class=HTMLResponse)
+def trusted_device_landing(token: str, request: Request, db: Annotated[Session, Depends(get_db)]):
+    """Bookmarkable sign-in link for e-reader browsers that don't retain cookies."""
+    if not token.startswith("dtd_"):
+        return RedirectResponse("/login", 303)
+    device = db.scalar(
+        select(TrustedDevice).where(
+            TrustedDevice.token_hash == token_digest(token), TrustedDevice.revoked_at.is_(None)
+        )
+    )
+    user = db.get(User, device.user_id) if device else None
+    if not device or not user or not user.is_active:
+        return RedirectResponse("/login", 303)
+    device.last_used_at = datetime.now(UTC)
     db.commit()
+    request.session.clear()
+    request.session["user_id"] = user.id
+    request.session["remember_me"] = True
+    response = templates.TemplateResponse(
+        request,
+        "ereader/trusted_device_bookmark.html",
+        {
+            "user": user,
+            "csrf": csrf(request),
+            "bookmark_url": f"{settings.public_url}/trusted-device/{token}",
+        },
+    )
+    set_trusted_device_cookie(request, response, token)
     return response
 
 

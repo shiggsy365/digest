@@ -5,7 +5,12 @@ from starlette.requests import Request
 from starlette.responses import Response
 
 from digest.db import Base
-from digest.main import _session_cookie_lifetime, login, set_trusted_device_cookie
+from digest.main import (
+    _session_cookie_lifetime,
+    login,
+    set_trusted_device_cookie,
+    trusted_device_landing,
+)
 from digest.models import Role, TrustedDevice, User
 from digest.security import (
     TRUSTED_DEVICE_COOKIE,
@@ -184,3 +189,89 @@ def test_trusted_device_cookie_keeps_samesite_for_regular_browsers() -> None:
 
     value = _set_cookie_header(response)
     assert b"samesite=lax" in value.lower()
+
+
+def test_login_on_ereader_redirects_to_bookmarkable_landing_page() -> None:
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    with Session(engine, expire_on_commit=False) as db:
+        user = User(
+            username="reader",
+            password_hash=hash_password("long-test-password"),
+            role=Role.USER,
+        )
+        db.add(user)
+        db.commit()
+
+        request = Request({
+            "type": "http",
+            "method": "POST",
+            "path": "/login",
+            "headers": [(b"user-agent", b"Mozilla/5.0 (Kobo Touch 0390/4.45.23697)")],
+            "query_string": b"",
+            "session": {"csrf": "csrf-token"},
+        })
+
+        response = login(
+            request,
+            db,
+            username="reader",
+            password="long-test-password",
+            form_csrf="csrf-token",
+            remember_me="true",
+        )
+
+        assert response.status_code == 303
+        location = response.headers["location"]
+        assert location.startswith("/trusted-device/dtd_")
+
+
+def test_trusted_device_landing_authenticates_and_shows_bookmark_url() -> None:
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    with Session(engine, expire_on_commit=False) as db:
+        user = User(
+            username="reader",
+            password_hash=hash_password("long-test-password"),
+            role=Role.USER,
+        )
+        db.add(user)
+        db.commit()
+        _, token = create_trusted_device(db, user, "Kobo Touch")
+        db.commit()
+
+        request = Request({
+            "type": "http",
+            "method": "GET",
+            "path": f"/trusted-device/{token}",
+            "headers": [(b"user-agent", b"Mozilla/5.0 (Kobo Touch 0390/4.45.23697)")],
+            "query_string": b"",
+            "session": {},
+        })
+
+        response = trusted_device_landing(token, request, db)
+        html = response.body.decode()
+
+        assert response.status_code == 200
+        assert request.session["user_id"] == user.id
+        assert token in html
+        assert _set_cookie_header(response).startswith(f"{TRUSTED_DEVICE_COOKIE}={token}".encode())
+
+
+def test_trusted_device_landing_redirects_invalid_token_to_login() -> None:
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    with Session(engine, expire_on_commit=False) as db:
+        request = Request({
+            "type": "http",
+            "method": "GET",
+            "path": "/trusted-device/dtd_does-not-exist",
+            "headers": [],
+            "query_string": b"",
+            "session": {},
+        })
+
+        response = trusted_device_landing("dtd_does-not-exist", request, db)
+
+        assert response.status_code == 303
+        assert response.headers["location"] == "/login"
