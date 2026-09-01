@@ -620,17 +620,23 @@ def login(
     response = RedirectResponse("/", 303)
     if remember_me:
         request.session["remember_me"] = True
-        trusted_device, trusted_token = create_trusted_device(
-            db, user, request.headers.get("user-agent", "")
-        )
-        set_trusted_device_cookie(response, trusted_token)
-        db.add(
-            AuditEvent(
-                event="trusted_device_created",
-                user_id=user.id,
-                message=f"Remembered trusted device {trusted_device.id}",
+        existing_token = request.cookies.get(TRUSTED_DEVICE_COOKIE, "")
+        existing_device = current_trusted_device(request, db, user) if existing_token else None
+        if existing_device:
+            existing_device.last_used_at = datetime.now(UTC)
+            set_trusted_device_cookie(response, existing_token)
+        else:
+            trusted_device, trusted_token = create_trusted_device(
+                db, user, request.headers.get("user-agent", "")
             )
-        )
+            set_trusted_device_cookie(response, trusted_token)
+            db.add(
+                AuditEvent(
+                    event="trusted_device_created",
+                    user_id=user.id,
+                    message=f"Remembered trusted device {trusted_device.id}",
+                )
+            )
     else:
         existing_device = current_trusted_device(request, db, user)
         if existing_device:

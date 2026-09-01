@@ -1,11 +1,11 @@
 from fastapi import HTTPException
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session
 from starlette.requests import Request
 
 from digest.db import Base
-from digest.main import _session_cookie_lifetime
-from digest.models import Role, User
+from digest.main import _session_cookie_lifetime, login
+from digest.models import Role, TrustedDevice, User
 from digest.security import (
     TRUSTED_DEVICE_COOKIE,
     create_trusted_device,
@@ -95,3 +95,43 @@ def test_revoked_trusted_device_cookie_does_not_restore_session() -> None:
             assert exc.status_code == 401
         else:
             raise AssertionError("Revoked trusted device authenticated")
+
+
+def test_login_with_remember_me_reuses_the_current_trusted_device() -> None:
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    with Session(engine, expire_on_commit=False) as db:
+        user = User(
+            username="reader",
+            password_hash=hash_password("long-test-password"),
+            role=Role.USER,
+        )
+        db.add(user)
+        db.commit()
+        device, token = create_trusted_device(db, user, "Kobo Touch")
+        db.commit()
+
+        request = Request({
+            "type": "http",
+            "method": "POST",
+            "path": "/login",
+            "headers": [(b"cookie", f"{TRUSTED_DEVICE_COOKIE}={token}".encode())],
+            "query_string": b"",
+            "session": {"csrf": "csrf-token"},
+        })
+
+        login(
+            request,
+            db,
+            username="reader",
+            password="long-test-password",
+            form_csrf="csrf-token",
+            remember_me="true",
+        )
+
+        active = db.scalars(
+            select(TrustedDevice).where(
+                TrustedDevice.user_id == user.id, TrustedDevice.revoked_at.is_(None)
+            )
+        ).all()
+        assert [item.id for item in active] == [device.id]
