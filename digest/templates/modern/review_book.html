@@ -36,7 +36,7 @@
   <label>Series number<input name="series_number" type="number" step="any" value="{{ book.series_number if book.series_number is not none else '' }}"></label>
   <label>Custom cover<input name="custom_cover" type="file" accept="image/jpeg,image/png,image/webp,image/gif"></label>
   <p class="muted">JPEG, PNG, WebP, or GIF up to 10 MB. The image will be converted to JPEG.</p>
-  <fieldset><legend>Lock fields during future refreshes</legend>{% for field in ['title','authors','isbns','language','description','publication_date','page_count','series','series_number'] %}<label><input class="checkbox" type="checkbox" name="locked_fields" value="{{ field }}"{% if field in book.locked_fields_json|fromjson %} checked{% endif %}> {{ field|replace('_', ' ') }}</label>{% endfor %}</fieldset>
+  <fieldset><legend>Lock fields during future refreshes</legend>{% for field in ['title','authors','isbns','language','description','publication_date','page_count','series','series_number','cover'] %}<label><input class="checkbox" type="checkbox" name="locked_fields" value="{{ field }}"{% if field in book.locked_fields_json|fromjson %} checked{% endif %}> {{ field|replace('_', ' ') }}</label>{% endfor %}</fieldset>
   <button>Save metadata</button>
 </form>
 {% endif %}

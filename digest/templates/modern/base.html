@@ -25,7 +25,7 @@
       <a class="{% if request.url.path.startswith('/shelves') %}active{% endif %}" href="/shelves"><span>◇</span> My shelves</a>
       <div class="sidebar-shelves" data-sidebar-shelves></div>
       <a class="{% if request.query_params.get('view') == 'favourites' %}active{% endif %}" href="/?view=favourites"><span>♡</span> Favourites <b data-nav-count="favourites"></b></a>
-      {% if user.role.value == 'admin' %}<span class="nav-label">Metadata</span><a class="{% if request.url.path == '/review' %}active{% endif %}" href="/review"><span>✓</span> Review <b data-nav-count="review"></b></a><a class="{% if request.url.path == '/review/grid' %}active{% endif %}" href="/review/grid"><span>☷</span> Grid editor</a>{% endif %}
+      {% if user.role.value == 'admin' %}<span class="nav-label">Metadata</span><a class="{% if request.url.path == '/review' %}active{% endif %}" href="/review"><span>✓</span> Review <b data-nav-count="review"></b></a><a class="{% if request.url.path == '/review/grid' %}active{% endif %}" href="/review/grid"><span>☷</span> Grid editor</a><span class="nav-label">Admin</span><a class="{% if request.url.path == '/admin/tokens' %}active{% endif %}" href="/admin/tokens"><span>⌘</span> API tokens</a><a class="{% if request.url.path == '/admin/users' %}active{% endif %}" href="/admin/users"><span>♙</span> Users</a><a class="{% if request.url.path == '/admin/config' %}active{% endif %}" href="/admin/config"><span>⚙</span> Configuration</a>{% endif %}
     </nav>
   </aside>
   <div class="app-frame">

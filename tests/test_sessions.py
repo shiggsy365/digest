@@ -290,6 +290,65 @@ def test_trusted_device_landing_without_welcome_param_redirects_to_library() -> 
         assert _set_cookie_header(response).startswith(f"{TRUSTED_DEVICE_COOKIE}={token}".encode())
 
 
+def test_trusted_device_landing_redirects_to_safe_next_path() -> None:
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    with Session(engine, expire_on_commit=False) as db:
+        user = User(
+            username="reader",
+            password_hash=hash_password("long-test-password"),
+            role=Role.USER,
+        )
+        db.add(user)
+        db.commit()
+        _, token = create_trusted_device(db, user, "KOReader")
+        db.commit()
+
+        request = Request({
+            "type": "http",
+            "method": "GET",
+            "path": f"/trusted-device/{token}",
+            "headers": [(b"user-agent", b"KOReader")],
+            "query_string": b"next=/discover",
+            "session": {},
+        })
+
+        response = trusted_device_landing(token, request, db)
+
+        assert response.status_code == 303
+        assert response.headers["location"] == "/discover"
+        assert request.session["user_id"] == user.id
+
+
+def test_trusted_device_landing_rejects_external_next_path() -> None:
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    with Session(engine, expire_on_commit=False) as db:
+        user = User(
+            username="reader",
+            password_hash=hash_password("long-test-password"),
+            role=Role.USER,
+        )
+        db.add(user)
+        db.commit()
+        _, token = create_trusted_device(db, user, "KOReader")
+        db.commit()
+
+        request = Request({
+            "type": "http",
+            "method": "GET",
+            "path": f"/trusted-device/{token}",
+            "headers": [(b"user-agent", b"KOReader")],
+            "query_string": b"next=//evil.test",
+            "session": {},
+        })
+
+        response = trusted_device_landing(token, request, db)
+
+        assert response.status_code == 303
+        assert response.headers["location"] == "/"
+
+
 def test_trusted_device_landing_redirects_invalid_token_to_login() -> None:
     engine = create_engine("sqlite:///:memory:")
     Base.metadata.create_all(engine)

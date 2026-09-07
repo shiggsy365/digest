@@ -133,7 +133,31 @@ def test_auto_scrape_applies_strong_match_in_default_language(monkeypatch) -> No
         }])
 
         assert auto_scrape_book(db, book) is True
-        assert applied[0][1] == {"organise": True, "replace_existing": True}
+        assert applied[0][1] == {"organise": True}
+
+
+def test_auto_scrape_respects_locked_metadata(monkeypatch) -> None:
+    monkeypatch.setattr("digest.metadata.organise_book", lambda db, book: None)
+    with metadata_session() as db:
+        book = Book(
+            title="Keep This Title",
+            primary_author="Careful Author",
+            authors_json='["Careful Author"]',
+            locked_fields_json='["authors", "title"]',
+        )
+        db.add_all([book, AppSetting(key="default_language", value="en")])
+        db.commit()
+        monkeypatch.setattr("digest.metadata.find_candidates", lambda db, book: [{
+            "title": "Wrong But Confident",
+            "authors": ["Bad Match"],
+            "language": "eng",
+            "confidence": 0.99,
+            "source": "test",
+        }])
+
+        assert auto_scrape_book(db, book) is True
+        assert book.title == "Keep This Title"
+        assert book.primary_author == "Careful Author"
 
 
 def test_manual_metadata_is_validated_saved_and_locked(monkeypatch) -> None:
@@ -302,6 +326,36 @@ def test_explicit_provider_match_overwrites_an_existing_cover(
         with Image.open(cover) as image:
             red, _green, blue = image.getpixel((0, 0))
         assert blue > red
+
+
+def test_provider_refresh_preserves_locked_cover(monkeypatch) -> None:
+    downloaded = []
+    monkeypatch.setattr("digest.metadata.download_cover", lambda *args: downloaded.append(args))
+    with metadata_session() as db:
+        book = Book(
+            title="Book",
+            primary_author="Author",
+            cover_path="/library/cover.jpg",
+            locked_fields_json='["cover"]',
+        )
+        db.add(book)
+        db.commit()
+
+        apply_candidate(
+            db,
+            book,
+            {
+                "title": "Book",
+                "authors": ["Author"],
+                "cover_url": "https://covers/new",
+                "source": "test",
+                "confidence": 1,
+            },
+            organise=False,
+        )
+
+        assert downloaded == []
+        assert book.cover_path == "/library/cover.jpg"
 
 
 def test_refresh_applies_a_confident_match_without_reorganising(monkeypatch) -> None:

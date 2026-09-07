@@ -20,7 +20,7 @@
   <section class="book-actions card">
     {% for file in book.files %}<a class="button" href="/books/{{ book.id }}/file/{{ file.id }}">Download {{ file.format|upper }}</a>{% endfor %}
     {% if user.kindle_email %}<form method="post" action="/books/{{ book.id }}/kindle"><input type="hidden" name="form_csrf" value="{{ csrf }}"><button>Send EPUB to Kindle</button></form>{% else %}<a class="button" href="/settings">Set Kindle address</a>{% endif %}
-    {% if user.role.value == 'admin' %}<a class="button" href="/review/{{ book.id }}?return_to={{ detail_url|urlencode }}">Edit metadata</a><form method="post" action="/books/{{ book.id }}/delete" onsubmit="return confirm('Permanently delete this book and all its files?')"><input type="hidden" name="form_csrf" value="{{ csrf }}"><button class="danger">Delete book and files</button></form>{% endif %}
+    {% if user.role.value == 'admin' %}<a class="button" href="/review/{{ book.id }}?return_to={{ detail_url|urlencode }}">Edit metadata</a><form method="post" action="/books/{{ book.id }}/metadata-lock"><input type="hidden" name="form_csrf" value="{{ csrf }}"><input type="hidden" name="return_to" value="{{ detail_url }}"><label class="checkbox"><input type="checkbox" name="lock_all_metadata" value="true"{% if metadata_all_locked %} checked{% endif %}> Lock all metadata</label><button>Save metadata lock</button></form><form method="post" action="/books/{{ book.id }}/delete" onsubmit="return confirm('Permanently delete this book and all its files?')"><input type="hidden" name="form_csrf" value="{{ csrf }}"><button class="danger">Delete book and files</button></form>{% endif %}
   </section>
 </article>
 {% endblock %}

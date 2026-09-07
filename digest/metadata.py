@@ -117,7 +117,7 @@ def apply_candidate(
     db.commit()
     if organise:
         organise_book(db, book)
-    if data.get("cover_url"):
+    if data.get("cover_url") and (replace_existing or "cover" not in locked):
         download_cover(book, data["cover_url"])
         write_approved_metadata(book)
         write_sidecars(book)
@@ -134,6 +134,7 @@ EDITABLE_FIELDS = {
     "page_count",
     "series",
     "series_number",
+    "cover",
 }
 
 
@@ -296,10 +297,17 @@ def auto_scrape_book(db: Session, book: Book) -> bool:
         float(candidate.get("confidence") or 0) < threshold
         or not language_matches(candidate.get("language"), language, allow_unknown=False)
     ):
-        db.add(AuditEvent(level="warning", event="metadata_auto_scrape",
-                          message=(f"Metadata match needs review for {book.title} ({book.id}); "
-                                   f"best confidence {float(candidate.get('confidence') or 0):.2f}")))
+        db.add(
+            AuditEvent(
+                level="warning",
+                event="metadata_auto_scrape",
+                message=(
+                    f"Metadata match needs review for {book.title} ({book.id}); "
+                    f"best confidence {float(candidate.get('confidence') or 0):.2f}"
+                ),
+            )
+        )
         db.commit()
         return False
-    apply_candidate(db, book, candidate, organise=True, replace_existing=True)
+    apply_candidate(db, book, candidate, organise=True)
     return True

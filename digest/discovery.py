@@ -1,4 +1,5 @@
 import json
+import logging
 import re
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, timedelta
@@ -15,13 +16,33 @@ from .providers import (
     normalise_author,
 )
 
+logger = logging.getLogger(__name__)
+
 GENRES = {
     "fantasy": "Fantasy",
     "science_fiction": "Science Fiction",
     "mystery_and_detective_stories": "Mystery",
-    "romance": "Romance",
     "thriller": "Thriller",
+    "romance": "Romance",
     "historical_fiction": "Historical Fiction",
+    "horror": "Horror",
+    "biography": "Biography & Memoirs",
+    "history": "History",
+    "self_help": "Self Help",
+    "true_crime": "True Crime",
+}
+HARDCOVER_GENRE_ALIASES = {
+    "Fantasy": ("Fantasy",),
+    "Science Fiction": ("Science Fiction", "Sci-Fi", "Sci Fi"),
+    "Mystery": ("Mystery & Detective", "Mystery", "Mystery & Detective Stories"),
+    "Thriller": ("Thriller & Suspense", "Thriller", "Suspense"),
+    "Romance": ("Romance",),
+    "Historical Fiction": ("Historical Fiction",),
+    "Horror": ("Horror",),
+    "Biography & Memoirs": ("Biography", "Biography & Memoirs", "Biography & Memoir", "Memoir", "Memoirs"),
+    "History": ("History",),
+    "Self Help": ("Self-Help", "Self Help", "Self Improvement"),
+    "True Crime": ("True Crime",),
 }
 DISCOVERY_MAX_AGE_YEARS = 20
 HARDCOVER_TRENDING_PERIODS = {
@@ -33,15 +54,15 @@ HARDCOVER_TRENDING_PERIODS = {
 HARDCOVER_FALLBACK_GENRES = [
     "Fantasy",
     "Science Fiction",
-    "Romance",
     "Mystery",
     "Thriller",
-    "Horror",
+    "Romance",
     "Historical Fiction",
-    "Young Adult",
-    "Biography",
+    "Horror",
+    "Biography & Memoirs",
     "History",
-    "Nonfiction",
+    "Self Help",
+    "True Crime",
 ]
 NYT_FALLBACK_LISTS = {
     "hardcover-fiction": "Hardcover Fiction",
@@ -597,6 +618,33 @@ def hardcover_genres(api_key: str, client: httpx.Client | None = None) -> list[s
     ][:50] or HARDCOVER_FALLBACK_GENRES
 
 
+def hardcover_genre_query_label(
+    api_key: str,
+    label: str,
+    client: httpx.Client | None = None,
+) -> str:
+    """Resolve a display genre label to the closest live Hardcover genre tag."""
+    wanted = str(label or "").strip()
+    if not wanted:
+        return ""
+
+    def key(value: str) -> str:
+        return re.sub(r"[^a-z0-9]+", "", value.casefold())
+
+    aliases = HARDCOVER_GENRE_ALIASES.get(wanted, (wanted,))
+    fallback = aliases[0] if aliases else wanted
+    try:
+        available = hardcover_genres(api_key, client=client)
+    except (httpx.HTTPError, TypeError, ValueError):
+        return fallback
+    by_key = {key(value): value for value in available if value}
+    for alias in aliases:
+        found = by_key.get(key(alias))
+        if found:
+            return found
+    return fallback
+
+
 def normalize_nyt_books(books: list[dict]) -> list[dict]:
     results: list[dict] = []
     seen: set[str] = set()
@@ -693,10 +741,24 @@ def nyt_bestsellers(
             params={"api-key": api_key},
             headers={"User-Agent": "Digest/0.1"},
         )
+        logger.info(
+            "NYT bestsellers response slug=%s date=%s status=%s",
+            slug,
+            published_date,
+            response.status_code,
+        )
         response.raise_for_status()
         results = response.json().get("results") or {}
         books = results.get("books", []) if isinstance(results, dict) else []
-        return normalize_nyt_books(books)
+        normalized = normalize_nyt_books(books)
+        logger.info(
+            "NYT bestsellers parsed slug=%s date=%s raw_books=%d normalized_books=%d",
+            slug,
+            published_date,
+            len(books),
+            len(normalized),
+        )
+        return normalized
     finally:
         if owns_client:
             client.close()

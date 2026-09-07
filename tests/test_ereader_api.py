@@ -3,9 +3,21 @@ from sqlalchemy.orm import Session
 from starlette.requests import Request
 
 from digest.db import Base
-from digest.ereader_api import authors, discover_author, library, shelf
+import pytest
+import httpx
+from fastapi import HTTPException
+
+from digest.ereader_api import (
+    _csrf,
+    authors,
+    bestseller_lists,
+    discover_author,
+    discover_search,
+    library,
+    shelf,
+)
 from digest.main import render, settings
-from digest.models import Book, ReviewState, Role, Shelf, ShelfBook, User
+from digest.models import AppSetting, Book, ReviewState, Role, Shelf, ShelfBook, User
 from digest.security import hash_password
 
 
@@ -18,6 +30,34 @@ def request_for(user: User, path: str = "/api/ereader/library") -> Request:
         "query_string": b"",
         "session": {"user_id": user.id, "csrf": "test-token"},
     })
+
+
+def test_ereader_api_allows_bearer_clients_without_csrf_header() -> None:
+    request = Request({
+        "type": "http",
+        "method": "POST",
+        "path": "/api/ereader/downloads",
+        "headers": [(b"authorization", b"Bearer dgt_test")],
+        "query_string": b"",
+        "session": {},
+    })
+
+    _csrf(request)
+
+
+def test_ereader_api_still_requires_csrf_for_session_clients() -> None:
+    request = Request({
+        "type": "http",
+        "method": "POST",
+        "path": "/api/ereader/downloads",
+        "headers": [],
+        "query_string": b"",
+        "session": {"csrf": "expected"},
+    })
+
+    with pytest.raises(HTTPException) as exc:
+        _csrf(request)
+    assert exc.value.status_code == 403
 
 
 def test_library_api_paginates_and_exposes_directories() -> None:
@@ -135,3 +175,45 @@ def test_discovery_author_is_available_to_the_spa(monkeypatch) -> None:
         assert result["author"] == "Known Author"
         assert result["items"][0]["title"] == "Another Book"
         assert result["items"][0]["in_library"] is False
+
+
+def test_discover_search_returns_empty_when_providers_fail(monkeypatch) -> None:
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    with Session(engine, expire_on_commit=False) as db:
+        user = User(username="reader", password_hash=hash_password("long-test-password"),
+                    role=Role.USER)
+        db.add(user)
+        db.commit()
+        monkeypatch.setattr(
+            "digest.ereader_api.search_discovery_books",
+            lambda *args, **kwargs: (_ for _ in ()).throw(httpx.ConnectError("offline")),
+        )
+        monkeypatch.setattr(
+            "digest.ereader_api.author_bibliography",
+            lambda *args, **kwargs: (_ for _ in ()).throw(httpx.ConnectError("offline")),
+        )
+
+        result = discover_search(request_for(user), db, q="anything")
+
+        assert result == {"items": []}
+
+
+def test_bestseller_lists_fall_back_when_provider_fails(monkeypatch) -> None:
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    with Session(engine, expire_on_commit=False) as db:
+        user = User(username="reader", password_hash=hash_password("long-test-password"),
+                    role=Role.USER)
+        db.add_all([user, AppSetting(key="nytimes_api_key", value="secret", secret=True)])
+        db.commit()
+        monkeypatch.setattr(
+            "digest.ereader_api.nyt_weekly_lists",
+            lambda *args, **kwargs: (_ for _ in ()).throw(httpx.ConnectError("offline")),
+        )
+
+        result = bestseller_lists(request_for(user), db)
+
+        assert result["configured"] is True
+        assert result["items"]
+        assert result["items"][0]["slug"]

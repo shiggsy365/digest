@@ -60,6 +60,12 @@ from .tokens import create_token, revoke_token
 
 router = APIRouter(prefix="/api/ereader", tags=["ereader"])
 Db = Annotated[Session, Depends(get_db)]
+NEW_RELEASE_PERIODS = {
+    "30d": 30,
+    "90d": 90,
+    "180d": 180,
+    "365d": 365,
+}
 
 
 def _user(request: Request, db: Session) -> User:
@@ -67,6 +73,9 @@ def _user(request: Request, db: Session) -> User:
 
 
 def _csrf(request: Request) -> None:
+    auth = request.headers.get("Authorization", "")
+    if auth.startswith("Bearer ") or auth.startswith("Basic "):
+        return
     supplied = request.headers.get("x-csrf-token", "")
     if not secrets.compare_digest(request.session.get("csrf", ""), supplied):
         raise HTTPException(403, "Invalid form token")
@@ -390,12 +399,16 @@ def trending(request: Request, db: Db, period: str = "now", genre: str = ""):
 
 
 @router.get("/discover/new-releases")
-def new_releases(request: Request, db: Db, genre: str = ""):
+def new_releases(request: Request, db: Db, genre: str = "", period: str = "90d"):
     user = _user(request, db)
     config = settings_map(db)
     if config.get("hardcover_api_key"):
-        books = hardcover_books(config["hardcover_api_key"], days=120, genre=genre,
-                                 new_releases=True)
+        books = hardcover_books(
+            config["hardcover_api_key"],
+            days=NEW_RELEASE_PERIODS.get(period, 90),
+            genre=genre,
+            new_releases=True,
+        )
         return {"items": _mark_owned(db, books)}
     return {"items": [_book(item) for item in build_discovery(db, user.id).new_releases]}
 
@@ -414,12 +427,50 @@ def genre(request: Request, db: Db, genre: str = "fantasy"):
 
 
 @router.get("/discover/search")
-def discover_search(request: Request, db: Db, q: str = ""):
-    _user(request, db); config = settings_map(db)
-    return {"items": _mark_owned(db, search_discovery_books(
-        q, hardcover_api_key=config.get("hardcover_api_key", ""),
-        language=config.get("default_language", "en")
-    ))}
+def discover_search(request: Request, db: Db, q: str = "", query: str = ""):
+    _user(request, db)
+    search_query = (q or query).strip()
+    config = settings_map(db)
+    try:
+        books = search_discovery_books(
+            search_query,
+            hardcover_api_key=config.get("hardcover_api_key", ""),
+            language=config.get("default_language", "en"),
+        )
+    except (httpx.HTTPError, TypeError, ValueError):
+        books = []
+    try:
+        books.extend(
+            author_bibliography(
+                search_query,
+                hardcover_api_key=config.get("hardcover_api_key", ""),
+                language=config.get("default_language", "en"),
+            )
+        )
+    except (httpx.HTTPError, TypeError, ValueError):
+        pass
+    seen = set()
+    items = []
+    for book in books:
+        key = (book.get("source", ""), book.get("source_id", ""), book.get("title", ""), book.get("author", ""))
+        if key in seen:
+            continue
+        seen.add(key)
+        items.append(book)
+    return {"items": _mark_owned(db, items)}
+
+
+def _ereader_bestseller_lists(db: Session) -> tuple[str, list[dict]]:
+    key = settings_map(db).get("nytimes_api_key", "")
+    if not key:
+        return "", []
+    try:
+        items = nyt_weekly_lists(key)
+    except (httpx.HTTPError, TypeError, ValueError):
+        items = []
+    if not items:
+        items = [{"slug": slug, "title": title} for slug, title in NYT_FALLBACK_LISTS.items()]
+    return key, items
 
 
 @router.get("/discover/author")
@@ -454,19 +505,15 @@ def discover_book(request: Request, db: Db, source: str = "", source_id: str = "
 
 @router.get("/discover/bestsellers/lists")
 def bestseller_lists(request: Request, db: Db):
-    _user(request, db); key = settings_map(db).get("nytimes_api_key", "")
-    items = nyt_weekly_lists(key) if key else []
-    if key and not items:
-        items = [{"slug": slug, "title": title} for slug, title in NYT_FALLBACK_LISTS.items()]
+    _user(request, db)
+    key, items = _ereader_bestseller_lists(db)
     return {"items": items, "configured": bool(key)}
 
 
 @router.get("/discover/bestsellers/weeks")
 def bestseller_weeks(request: Request, db: Db, slug: str):
-    _user(request, db); key = settings_map(db).get("nytimes_api_key", "")
-    lists = nyt_weekly_lists(key) if key else []
-    if key and not lists:
-        lists = [{"slug": slug, "title": title} for slug, title in NYT_FALLBACK_LISTS.items()]
+    _user(request, db)
+    _, lists = _ereader_bestseller_lists(db)
     item = next((value for value in lists if value["slug"] == slug), None)
     if not item: raise HTTPException(404, "Bestseller list not found")
     return {"items": nyt_weeks(item)}
@@ -474,9 +521,14 @@ def bestseller_weeks(request: Request, db: Db, slug: str):
 
 @router.get("/discover/bestsellers")
 def bestsellers(request: Request, db: Db, slug: str, week: str = "current"):
-    _user(request, db); key = settings_map(db).get("nytimes_api_key", "")
+    _user(request, db)
+    key = settings_map(db).get("nytimes_api_key", "")
     if not key: return {"items": [], "configured": False}
-    return {"items": _mark_owned(db, nyt_bestsellers(key, slug, week)), "configured": True}
+    try:
+        items = nyt_bestsellers(key, slug, week)
+    except (httpx.HTTPError, TypeError, ValueError):
+        items = []
+    return {"items": _mark_owned(db, items), "configured": True}
 
 
 @router.get("/shelves")
@@ -562,6 +614,7 @@ def _wanted(item: WantedItem, releases: list[AcquisitionRelease] | None = None):
     return {"id": item.id, "title": item.title, "author": item.author,
             "cover_url": item.cover_url, "status": item.status.value, "attempts": item.attempts,
             "last_error": item.last_error, "acquired_book_id": item.acquired_book_id,
+            "selected_release_id": item.selected_release_id,
             "releases": [{"id": release.id, "title": release.title, "format": release.format,
                            "size_bytes": release.size_bytes, "score": release.match_score}
                           for release in releases or []]}

@@ -1,5 +1,5 @@
 x-digest-app: &digest-app
-  image: ghcr.io/shiggsy365/digest:${DIGEST_VERSION:-latest}
+  image: ghcr.io/shiggsy365/digest:${DIGEST_VERSION:-1.0.38}
   user: "${PUID:-1000}:${PGID:-1000}"
   environment: &digest-environment
     DIGEST_SECRET_KEY: ${DIGEST_SECRET_KEY:?Set DIGEST_SECRET_KEY in .env}
@@ -28,6 +28,7 @@ services:
   digest-database:
     image: postgres:17-alpine
     restart: unless-stopped
+    container_name: digest_database
     environment:
       POSTGRES_DB: digest
       POSTGRES_USER: digest
@@ -46,6 +47,7 @@ services:
     <<: *digest-app
     command: ["alembic", "upgrade", "head"]
     restart: "no"
+    container_name: digest_migrate
     depends_on:
       digest-database:
         condition: service_healthy
@@ -53,6 +55,7 @@ services:
   digest-web:
     <<: *digest-app
     restart: unless-stopped
+    container_name: digest_web
     ports:
       - "${DIGEST_BIND_ADDRESS:-127.0.0.1}:${DIGEST_PORT:-8000}:8000"
     depends_on:
@@ -76,6 +79,7 @@ services:
     <<: *digest-app
     command: ["python", "-m", "digest.worker"]
     restart: unless-stopped
+    container_name: digest_worker
     depends_on:
       digest-migrate:
         condition: service_completed_successfully
@@ -86,6 +90,7 @@ services:
     image: ghcr.io/calibrain/shelfmark:latest
 #    profiles: ["acquisition"]
     restart: unless-stopped
+    container_name: digest_shelfmark
     ports:
       - "127.0.0.1:${SHELFMARK_PORT:-8084}:8084"
     environment:
@@ -115,6 +120,7 @@ services:
     image: lscr.io/linuxserver/prowlarr:latest
 #    profiles: ["usenet"]
     restart: unless-stopped
+    container_name: digest_prowlarr
     ports:
       - "127.0.0.1:${PROWLARR_PORT:-9696}:9696"
     environment:
@@ -136,6 +142,7 @@ services:
     image: lscr.io/linuxserver/sabnzbd:latest
 #    profiles: ["usenet"]
     restart: unless-stopped
+    container_name: digest_sabnzbd
     ports:
       - "127.0.0.1:${SABNZBD_PORT:-8080}:8080"
     environment:

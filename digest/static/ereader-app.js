@@ -46,6 +46,73 @@
   }
   function api(path, done) { ajax('GET', '/api/ereader' + path, null, done); }
   function fail(error) { content.innerHTML = '<main><p class="error">' + esc(error) + '</p></main>'; }
+  function bookMessage(text) {
+    var node = document.getElementById('book-message');
+    if (node) node.innerHTML = text ? esc(text) : '';
+  }
+  function findDownload(id, done) {
+    api('/downloads', function (error, data) {
+      var found = null, items, i;
+      if (error) return done(error);
+      items = data.items || [];
+      for (i = 0; i < items.length; i++) if (String(items[i].id) === String(id)) found = items[i];
+      done(null, found);
+    });
+  }
+  function releaseLabel(release) {
+    var parts = [];
+    if (release.format) parts.push(String(release.format).toUpperCase());
+    if (release.size_bytes) parts.push(Math.round(release.size_bytes / 1024 / 1024) + ' MB');
+    return parts.join(' - ');
+  }
+  function pollDownload(id, phase, tries) {
+    setTimeout(function () {
+      findDownload(id, function (error, item) {
+        var releases, status;
+        if (error || !item) {
+          bookMessage(error || 'Download request could not be found.');
+          return;
+        }
+        releases = item.releases || [];
+        status = item.status || 'unknown';
+        if (phase === 'search' && releases.length && status === 'wanted') {
+          content.innerHTML = '<main><h1>Select release</h1><p>' + esc(item.title) + '</p>' +
+            releases.map(function (release) {
+              return '<div class="download-item"><b>' + esc(release.title) +
+                '</b><div class="muted">' + esc(releaseLabel(release)) +
+                '</div><button data-release="' + attr(release.id) +
+                '" data-wanted="' + attr(item.id) + '">Download</button></div>';
+            }).join('') + '</main>';
+          fitShell();
+          return;
+        }
+        if (status === 'available') {
+          content.innerHTML = '<main><h1>Download completed</h1><p>' + esc(item.title) +
+            '</p><p><a href="#downloads">View downloads</a></p></main>';
+          fitShell();
+          return;
+        }
+        if (status === 'failed' || status === 'cancelled') {
+          content.innerHTML = '<main><h1>' + (phase === 'search' ? 'No releases found' : 'Download failed') +
+            '</h1><p>' + esc(item.last_error || item.title) +
+            '</p><p><a href="#downloads">View downloads</a></p></main>';
+          fitShell();
+          return;
+        }
+        if (tries >= (phase === 'search' ? 30 : 120)) {
+          content.innerHTML = '<main><h1>' + (phase === 'search' ? 'Still searching for releases' :
+            'Download still running') + '</h1><p><a href="#downloads">View downloads</a></p></main>';
+          fitShell();
+          return;
+        }
+        content.innerHTML = '<main><h1>' + (phase === 'search' ? 'Searching for releases' :
+          'Downloading') + '</h1><p>' + esc(item.title) +
+          '</p><p class="muted">Status: ' + esc(status) + '</p></main>';
+        fitShell();
+        pollDownload(id, phase, tries + 1);
+      });
+    }, tries ? 2000 : 500);
+  }
   function setFontSize(size) {
     var html = document.documentElement;
     html.className = html.className.replace(/\bfs-(sm|lg)\b/g, '').replace(/\s+/g, ' ').replace(/^\s+|\s+$/g, '');
@@ -224,9 +291,14 @@
         '<button data-discover="genre?genre=fantasy">Fantasy</button> ' +
         '<button data-discover="genre?genre=science_fiction">Science Fiction</button> ' +
         '<button data-discover="genre?genre=mystery_and_detective_stories">Mystery</button> ' +
-        '<button data-discover="genre?genre=romance">Romance</button> ' +
         '<button data-discover="genre?genre=thriller">Thriller</button> ' +
-        '<button data-discover="genre?genre=historical_fiction">Historical Fiction</button></div>';
+        '<button data-discover="genre?genre=romance">Romance</button> ' +
+        '<button data-discover="genre?genre=historical_fiction">Historical Fiction</button> ' +
+        '<button data-discover="genre?genre=horror">Horror</button> ' +
+        '<button data-discover="genre?genre=biography">Biography &amp; Memoirs</button> ' +
+        '<button data-discover="genre?genre=history">History</button> ' +
+        '<button data-discover="genre?genre=self_help">Self Help</button> ' +
+        '<button data-discover="genre?genre=true_crime">True Crime</button></div>';
       filters.innerHTML = '<div class="section-tabs"><button data-discover="trending">Trending</button> ' +
         '<button data-discover="new-releases">New releases</button> ' +
         '<button data-discover="genre?genre=fantasy">Genres</button></div>' + subfilters;
@@ -284,7 +356,10 @@
         encodeURIComponent(state.navigation) + '">Previous book</a>' : '') +
         (data.next_id ? '<a href="#book/' + attr(data.next_id) + '?navigation=' +
         encodeURIComponent(state.navigation) + '">Next book</a>' : '') +
-        moreByAuthor(data.author) + '<button data-kindle="' + attr(data.id) + '">Send to Kindle</button>';
+        moreByAuthor(data.author) + (data.files || []).map(function (file) {
+          return '<a href="digest://books/' + attr(data.id) + '/file/' + attr(file.id) +
+            '">Download ' + esc((file.format || '').toUpperCase()) + '</a>';
+        }).join('');
       filters.innerHTML = '';
       content.innerHTML = '<main><div class="detail-heading">' +
         (data.cover_url ? '<img src="' + attr(data.cover_url) + '" alt="">' : '') +
@@ -334,7 +409,12 @@
         data.items.map(function (item) {
           var done = item.status === 'available' || item.status === 'failed';
           return '<li class="download-item"><b>' + esc(item.title) + '</b><div>' + esc(item.author) +
-            '</div><span class="muted">' + esc(item.status) + '</span><div class="actions">' +
+            '</div><span class="muted">' + esc(item.status) + '</span>' +
+            ((!item.selected_release_id && item.status === 'wanted' && item.releases && item.releases.length) ?
+              '<div>' + item.releases.map(function (release) {
+                return '<button data-release="' + attr(release.id) + '" data-wanted="' + attr(item.id) +
+                  '">Download ' + esc(releaseLabel(release)) + '</button>';
+              }).join(' ') + '</div>' : '') + '<div class="actions">' +
             (item.status === 'failed' ? '<button data-download="retry" data-id="' + attr(item.id) +
             '">Retry</button>' : '') + '<button data-download="' + (done ? 'remove' : 'cancel') +
             '" data-id="' + attr(item.id) + '">' + (done ? 'Remove' : 'Cancel') + '</button></div></li>';
@@ -403,11 +483,29 @@
     if ((value = target.getAttribute('data-download'))) ajax('POST', '/api/ereader/downloads/' +
       target.getAttribute('data-id') + '/' + value, null,
       function (error) { if (error) fail(error); else downloads(); });
-    if (target.getAttribute('data-want')) ajax('POST', '/api/ereader/downloads',
-      {source: target.getAttribute('data-source'), source_id: target.getAttribute('data-source-id'),
-        title: target.getAttribute('data-title'), author: target.getAttribute('data-author'),
-        cover_url: target.getAttribute('data-cover')},
-      function (error) { if (error) fail(error); else location.hash = 'downloads'; });
+    if ((value = target.getAttribute('data-release'))) ajax('POST', '/api/ereader/downloads/' +
+      target.getAttribute('data-wanted') + '/releases/' + value, null,
+      function (error, data) {
+        if (error) return fail(error);
+        content.innerHTML = '<main><h1>Downloading</h1><p>' + esc(data.title || '') +
+          '</p><p class="muted">Status: starting</p></main>';
+        fitShell();
+        pollDownload(data.id || target.getAttribute('data-wanted'), 'download', 0);
+      });
+    if (target.getAttribute('data-want')) {
+      bookMessage('Searching for releases...');
+      ajax('POST', '/api/ereader/downloads',
+        {source: target.getAttribute('data-source'), source_id: target.getAttribute('data-source-id'),
+          title: target.getAttribute('data-title'), author: target.getAttribute('data-author'),
+          cover_url: target.getAttribute('data-cover')},
+        function (error, data) {
+          if (error) return fail(error);
+          content.innerHTML = '<main><h1>Searching for releases</h1><p>' +
+            esc(data.title || target.getAttribute('data-title')) + '</p></main>';
+          fitShell();
+          pollDownload(data.id, 'search', 0);
+        });
+    }
     if ((value = target.getAttribute('data-delete-shelf'))) ajax('DELETE',
       '/api/ereader/shelves/' + value, null, function (error) { if (error) fail(error); else shelves(); });
     if ((value = target.getAttribute('data-shelf-book'))) ajax(target.getAttribute('data-method'),

@@ -1,4 +1,5 @@
 import json
+import logging
 import math
 import mimetypes
 import re
@@ -9,8 +10,8 @@ from email.message import EmailMessage
 from email.utils import format_datetime
 from pathlib import Path
 from typing import Annotated
-from urllib.parse import parse_qs, urlencode, urlsplit
-from xml.etree.ElementTree import Element, SubElement, tostring
+from urllib.parse import parse_qs, quote, urlencode, urlsplit
+from xml.etree.ElementTree import Element, SubElement, register_namespace, tostring
 
 import httpx
 from fastapi import Body, Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
@@ -41,6 +42,7 @@ from .discovery import (
     build_discovery,
     find_library_book,
     hardcover_books,
+    hardcover_genre_query_label,
     hardcover_genres,
     nyt_bestsellers,
     nyt_weekly_lists,
@@ -82,6 +84,7 @@ from .kobo import (
 )
 from .library import delete_book, organise_book, scan_library
 from .metadata import (
+    EDITABLE_FIELDS,
     apply_candidate,
     apply_manual_metadata,
     find_candidates,
@@ -123,6 +126,11 @@ from .security import (
 )
 from .text import plain_text
 from .tokens import TokenError, create_token, revoke_token
+
+logger = logging.getLogger(__name__)
+_nyt_opds_cache: dict[tuple[str, str], tuple[datetime, list[dict]]] = {}
+NYT_OPDS_CACHE_TTL = timedelta(hours=6)
+NYT_OPDS_EMPTY_CACHE_TTL = timedelta(minutes=15)
 
 settings = get_settings()
 app = FastAPI(title="Digest", version="0.1.0")
@@ -210,6 +218,41 @@ def discovery_book_url(item, return_to: str = "/discover") -> str:
 
 
 templates.env.globals["discovery_book_url"] = discovery_book_url
+
+OPDS_MEDIA_TYPES = {
+    "epub": "application/epub+zip",
+    "kepub": "application/epub+zip",
+    "mobi": "application/x-mobipocket-ebook",
+    "azw3": "application/vnd.amazon.ebook",
+    "pdf": "application/pdf",
+}
+DC_NS = "http://purl.org/dc/terms/"
+OPDS_NS = "http://opds-spec.org/2010/catalog"
+ATOM_NS = "http://www.w3.org/2005/Atom"
+OS_NS = "http://a9.com/-/spec/opensearch/1.1/"
+register_namespace("", ATOM_NS)
+register_namespace("dc", DC_NS)
+register_namespace("opds", OPDS_NS)
+register_namespace("os", OS_NS)
+OPDS_DISCOVER_GENRES = (
+    "fantasy",
+    "science_fiction",
+    "mystery_and_detective_stories",
+    "thriller",
+    "romance",
+    "historical_fiction",
+    "horror",
+    "biography",
+    "history",
+    "self_help",
+    "true_crime",
+)
+OPDS_NEW_RELEASE_PERIODS = {
+    "30d": ("Past 30 Days", 30),
+    "90d": ("Past 90 Days", 90),
+    "180d": ("Past 6 Months", 180),
+    "365d": ("Past Year", 365),
+}
 
 
 @app.on_event("startup")
@@ -324,7 +367,31 @@ def settings_context(request: Request, db: Session, user: User, **extra) -> dict
 
 def safe_return_to(value: str | None, fallback: str = "/") -> str:
     value = (value or "").strip()
-    return value if value.startswith("/") and not value.startswith("//") else fallback
+    has_local_path = (
+        value.startswith("/")
+        and not value.startswith("//")
+        and not re.match(r"^/\w[\w+.-]*:", value)
+    )
+    return (
+        value
+        if has_local_path
+        else fallback
+    )
+
+
+METADATA_LOCK_FIELDS = sorted(EDITABLE_FIELDS)
+
+
+def set_all_metadata_locked(book: Book, locked: bool) -> None:
+    book.locked_fields_json = json.dumps(METADATA_LOCK_FIELDS if locked else [])
+
+
+def all_metadata_locked(book: Book) -> bool:
+    try:
+        locked = set(json.loads(book.locked_fields_json or "[]"))
+    except (TypeError, ValueError):
+        return False
+    return set(METADATA_LOCK_FIELDS).issubset(locked)
 
 
 SORT_KEYS = {"title", "author", "release_date", "series", "added"}
@@ -655,7 +722,7 @@ def login(
         # (e.g. as a browser home page) skips straight to the library.
         response = RedirectResponse(f"/trusted-device/{bookmark_token}?welcome=1", 303)
     else:
-        response = RedirectResponse("/", 303)
+        response = RedirectResponse(safe_return_to(request.query_params.get("next"), "/"), 303)
     if remember_me:
         set_trusted_device_cookie(request, response, bookmark_token)
     else:
@@ -695,7 +762,7 @@ def trusted_device_landing(token: str, request: Request, db: Annotated[Session, 
             },
         )
     else:
-        response = RedirectResponse("/", 303)
+        response = RedirectResponse(safe_return_to(request.query_params.get("next"), "/"), 303)
     set_trusted_device_cookie(request, response, token)
     return response
 
@@ -988,7 +1055,10 @@ def discover(
                 raise ValueError("Hardcover discovery requires an API key in Administration.")
             if period not in HARDCOVER_TRENDING_PERIODS:
                 period = "now"
-            selected_genre = GENRES[genre_slug] if genre else ""
+            selected_genre = (
+                hardcover_genre_query_label(api_key, GENRES[genre_slug])
+                if genre else ""
+            )
             if effective_mode == "hardcover-trending":
                 label, days = HARDCOVER_TRENDING_PERIODS[period]
                 provider_books = hardcover_books(api_key, days=days, genre=selected_genre)
@@ -1012,7 +1082,10 @@ def discover(
                 if selected is None:
                     raise ValueError("Choose a valid bestseller list.")
                 selected_list = selected["title"]
-                bestseller_weeks = nyt_weeks(selected)
+                bestseller_weeks = [
+                    {"date": "current", "title": "Current"},
+                    *nyt_weeks(selected),
+                ]
                 if effective_mode == "bestsellers":
                     if week != "current" and not re.fullmatch(r"\d{4}-\d{2}-\d{2}", week):
                         raise ValueError("Choose a valid bestseller week.")
@@ -1023,7 +1096,7 @@ def discover(
     except (httpx.HTTPError, TypeError, ValueError) as exc:
         provider_error = str(exc) or "The discovery provider is temporarily unavailable."
     if config.get("hardcover_api_key") and effective_mode != "search":
-        genre_label = GENRES[genre_slug]
+        genre_label = hardcover_genre_query_label(config["hardcover_api_key"], GENRES[genre_slug])
         try:
             hardcover_genre_books = hardcover_books(
                 config["hardcover_api_key"],
@@ -1431,7 +1504,7 @@ def api_bestseller_weeks(
     item = next((value for value in lists if value["slug"] == slug), None)
     if item is None:
         raise HTTPException(400, "Invalid bestseller list")
-    return {"title": item["title"], "weeks": nyt_weeks(item)}
+    return {"title": item["title"], "weeks": [{"date": "current", "title": "Current"}, *nyt_weeks(item)]}
 
 
 @app.get("/api/discovery/bestsellers")
@@ -1507,9 +1580,29 @@ def book_detail(
             "reading_state": reading_state,
             "shelves": shelves,
             "shelf_ids": shelf_ids,
+            "metadata_all_locked": all_metadata_locked(book),
         },
         user,
     )
+
+
+@app.post("/books/{book_id}/metadata-lock")
+def update_book_metadata_lock(
+    book_id: str,
+    request: Request,
+    db: Annotated[Session, Depends(get_db)],
+    form_csrf: Annotated[str, Form()],
+    return_to: Annotated[str | None, Form()] = None,
+    lock_all_metadata: Annotated[str | None, Form()] = None,
+):
+    require_admin(request, db)
+    check_csrf(request, form_csrf)
+    book = db.get(Book, book_id)
+    if not book:
+        raise HTTPException(404)
+    set_all_metadata_locked(book, lock_all_metadata is not None)
+    db.commit()
+    return RedirectResponse(safe_return_to(return_to, f"/books/{book.id}"), 303)
 
 
 @app.post("/books/{book_id}/reading-state")
@@ -1628,7 +1721,13 @@ def metadata_grid(
     return render(
         request,
         "metadata_grid.html",
-        {"books": results[:100], "q": q.strip(), "page": page, "has_next": len(results) > 100},
+        {
+            "books": results[:100],
+            "q": q.strip(),
+            "page": page,
+            "has_next": len(results) > 100,
+            "metadata_lock_all": {book.id: all_metadata_locked(book) for book in results[:100]},
+        },
         user,
     )
 
@@ -1644,11 +1743,13 @@ def update_metadata_grid(
     series_values: Annotated[list[str], Form()],
     series_numbers: Annotated[list[str], Form()],
     return_to: Annotated[str | None, Form()] = None,
+    lock_all_metadata_ids: Annotated[list[str] | None, Form()] = None,
 ):
     require_admin(request, db)
     check_csrf(request, form_csrf)
     books = {book.id: book for book in db.scalars(select(Book).where(Book.id.in_(book_ids)))}
     updates: list[tuple[Book, str, list[str], str | None, float | None]] = []
+    locked_book_ids = set(lock_all_metadata_ids or [])
     try:
         rows = list(zip(book_ids, titles, authors, series_values, series_numbers, strict=True))
         if not rows:
@@ -1661,7 +1762,9 @@ def update_metadata_grid(
             if not title.strip() or not author_list:
                 raise ValueError("Every book must retain a title and at least one author.")
             series_number = float(number) if number.strip() else None
-            updates.append((book, title.strip(), author_list, series.strip() or None, series_number))
+            updates.append(
+                (book, title.strip(), author_list, series.strip() or None, series_number)
+            )
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
     for book, title, author_list, series, series_number in updates:
@@ -1671,6 +1774,7 @@ def update_metadata_grid(
         book.authors_json = json.dumps(author_list)
         book.series = series
         book.series_number = series_number
+        set_all_metadata_locked(book, book.id in locked_book_ids)
         book.metadata_source = "manual"
         book.match_confidence = 1
     db.commit()
@@ -2759,10 +2863,9 @@ def manual_scan(
     return RedirectResponse("/review", 303)
 
 
-@app.get("/opds")
-def opds(request: Request, db: Annotated[Session, Depends(get_db)]):
+def _require_opds_user(request: Request, db: Session) -> User:
     try:
-        require_user(request, db)
+        return require_user(request, db)
     except HTTPException as exc:
         if exc.status_code == 401:
             raise HTTPException(
@@ -2771,31 +2874,2046 @@ def opds(request: Request, db: Annotated[Session, Depends(get_db)]):
                 headers={"WWW-Authenticate": 'Basic realm="Digest OPDS"'},
             ) from exc
         raise
-    feed = Element("feed", xmlns="http://www.w3.org/2005/Atom")
-    SubElement(feed, "title").text = "Digest Library"
-    SubElement(feed, "id").text = settings.public_url + "/opds"
-    for book in db.scalars(
-        select(Book).where(Book.review_state == ReviewState.READY).order_by(Book.title)
-    ).all():
-        entry = SubElement(feed, "entry")
-        SubElement(entry, "id").text = book.id
-        SubElement(entry, "title").text = book.title
+
+
+def _opds_feed(title: str, feed_id: str) -> Element:
+    feed = Element(f"{{{ATOM_NS}}}feed")
+    SubElement(feed, "title").text = title
+    SubElement(feed, "id").text = feed_id
+    SubElement(feed, "updated").text = datetime.now(UTC).isoformat()
+    return feed
+
+
+def _opds_response(feed: Element) -> Response:
+    headers = _opds_headers()
+    return Response(
+        tostring(feed, encoding="utf-8", xml_declaration=True),
+        media_type="application/atom+xml",
+        headers=headers,
+    )
+
+
+def _opensearch_response(description: Element) -> Response:
+    return Response(
+        tostring(description, encoding="utf-8", xml_declaration=True),
+        media_type="application/opensearchdescription+xml",
+        headers=_opds_headers(),
+    )
+
+
+def _opds_headers() -> dict[str, str]:
+    return {
+        "Cache-Control": "no-store, max-age=0",
+        "Pragma": "no-cache",
+        "Last-Modified": format_datetime(datetime.now(UTC), usegmt=True),
+    }
+
+
+def _wants_opds_json(request: Request) -> bool:
+    return "application/opds+json" in request.headers.get("accept", "")
+
+
+def _opds_json_response(data: dict) -> JSONResponse:
+    return JSONResponse(data, media_type="application/opds+json", headers=_opds_headers())
+
+
+def _opds_json_link(title: str, href: str, count: int | None = None) -> dict:
+    link = {
+        "title": title,
+        "rel": "subsection",
+        "href": _opds_href(href),
+        "type": "application/opds+json",
+    }
+    if count is not None:
+        link["numberOfItems"] = count
+        link["properties"] = {"numberOfItems": count}
+    return link
+
+
+def _opds_href(path_or_url: str | None) -> str:
+    value = path_or_url or ""
+    if value.startswith(("http://", "https://")):
+        return value
+    if not value.startswith("/"):
+        value = "/" + value
+    return value
+
+
+def _book_authors(book: Book) -> list[str]:
+    try:
+        authors = json.loads(book.authors_json or "[]")
+    except (TypeError, ValueError):
+        authors = []
+    return [str(author) for author in (authors or [book.primary_author]) if str(author)]
+
+
+def _book_isbns(book: Book) -> list[str]:
+    try:
+        isbns = json.loads(book.isbns_json or "[]")
+    except (TypeError, ValueError):
+        isbns = []
+    return [str(isbn) for isbn in isbns if str(isbn)]
+
+
+def _opds_json_publication(book: Book) -> dict:
+    authors = _book_authors(book)
+    metadata: dict = {
+        "title": book.title,
+        "author": ", ".join(authors),
+        "identifier": book.id,
+    }
+    if book.description:
+        metadata["description"] = plain_text(book.description)
+    if book.language:
+        metadata["language"] = book.language
+    if book.publication_date:
+        metadata["published"] = book.publication_date
+    if book.series:
+        metadata["belongsTo"] = {
+            "series": [
+                {
+                    "name": book.series,
+                    **({"position": book.series_number} if book.series_number is not None else {}),
+                }
+            ]
+        }
+    isbns = _book_isbns(book)
+    if isbns:
+        metadata["identifier"] = [book.id, *[f"urn:isbn:{isbn}" for isbn in isbns]]
+    publication = {
+        "metadata": metadata,
+        "links": [
+            {
+                "rel": "http://opds-spec.org/acquisition",
+                "href": _opds_href(f"/books/{book.id}/file/{item.id}"),
+                "type": OPDS_MEDIA_TYPES.get(item.format, "application/octet-stream"),
+                "title": item.format.upper(),
+                "properties": {"numberOfBytes": item.size_bytes},
+            }
+            for item in book.files
+        ],
+    }
+    if book.cover_path:
+        publication["images"] = [
+            {
+                "rel": "http://opds-spec.org/image",
+                "href": _opds_href(f"/books/{book.id}/cover"),
+                "type": "image/jpeg",
+            },
+            {
+                "rel": "http://opds-spec.org/image/thumbnail",
+                "href": _opds_href(f"/books/{book.id}/cover"),
+                "type": "image/jpeg",
+            },
+        ]
+    return publication
+
+
+def _opds_json_virtual_publication(title: str, author: str = "", description: str = "") -> dict:
+    metadata = {"title": title}
+    if author:
+        metadata["author"] = author
+    if description:
+        metadata["description"] = description
+    return {"metadata": metadata, "links": []}
+
+
+def _opds_discovery_request_url(values: dict) -> str:
+    return "/opds/discover/request?" + urlencode(
+        {
+            "source": values.get("source") or "openlibrary",
+            "source_id": values.get("source_id") or "",
+            "title": values.get("title") or "",
+            "author": values.get("author") or "",
+            "isbn": values.get("isbn") or "",
+            "cover_url": values.get("cover_url") or "",
+        }
+    )
+
+
+def _opds_add_book_entry(feed: Element, book: Book) -> None:
+    entry = SubElement(feed, "entry")
+    SubElement(entry, "id").text = book.id
+    SubElement(entry, "title").text = book.title
+    SubElement(entry, "updated").text = book.updated_at.isoformat()
+    SubElement(entry, f"{{{DC_NS}}}identifier").text = book.id
+    try:
+        authors = json.loads(book.authors_json or "[]")
+    except (TypeError, ValueError):
+        authors = []
+    authors = authors or [book.primary_author]
+    for name in authors:
+        author = SubElement(entry, "author")
+        SubElement(author, "name").text = str(name)
+        SubElement(entry, f"{{{DC_NS}}}creator").text = str(name)
+    if book.publication_date:
+        SubElement(entry, "published").text = book.publication_date
+        SubElement(entry, f"{{{DC_NS}}}issued").text = book.publication_date
+    if book.language:
+        SubElement(entry, f"{{{DC_NS}}}language").text = book.language
+    if book.series:
+        category = SubElement(entry, "category", term=book.series, label=book.series)
+        category.set(f"{{{OPDS_NS}}}facetGroup", "Series")
+        if book.series_number is not None:
+            SubElement(entry, f"{{{DC_NS}}}extent").text = f"Series #{book.series_number:g}"
+    try:
+        isbns = json.loads(book.isbns_json or "[]")
+    except (TypeError, ValueError):
+        isbns = []
+    for isbn in isbns:
+        SubElement(entry, f"{{{DC_NS}}}identifier").text = f"urn:isbn:{isbn}"
+    if book.description:
+        description = plain_text(book.description)
+        SubElement(entry, "summary", type="text").text = description
+        SubElement(entry, "content", type="text").text = description
+    if book.cover_path:
+        href = _opds_href(f"/books/{book.id}/cover")
+        SubElement(entry, "link", rel="http://opds-spec.org/image", href=href, type="image/jpeg")
+        SubElement(
+            entry,
+            "link",
+            rel="http://opds-spec.org/image/thumbnail",
+            href=href,
+            type="image/jpeg",
+        )
+    for item in book.files:
+        SubElement(
+            entry,
+            "link",
+            rel="http://opds-spec.org/acquisition",
+            href=_opds_href(f"/books/{book.id}/file/{item.id}"),
+            type=OPDS_MEDIA_TYPES.get(item.format, "application/octet-stream"),
+            title=item.format.upper(),
+            length=str(item.size_bytes),
+        )
+
+
+def _opds_add_navigation_entry(feed: Element, title: str, href: str, entry_id: str = "") -> None:
+    entry = SubElement(feed, "entry")
+    SubElement(entry, "id").text = entry_id or href
+    SubElement(entry, "title").text = title
+    SubElement(entry, "updated").text = datetime.now(UTC).isoformat()
+    SubElement(
+        entry,
+        "link",
+        rel="subsection",
+        href=_opds_href(href),
+        type="application/atom+xml;profile=opds-catalog",
+    )
+
+
+def _opds_navigation_response(
+    request: Request,
+    title: str,
+    feed_id: str,
+    navigation: list[dict],
+    *,
+    searchable: bool = False,
+) -> Response | JSONResponse:
+    if _wants_opds_json(request):
+        links = [{"rel": "self", "href": _opds_href(feed_id), "type": "application/opds+json"}]
+        if searchable:
+            links.extend(_opds_discovery_search_links())
+        return _opds_json_response(
+            {
+                "metadata": {"title": title, "numberOfItems": len(navigation)},
+                "links": links,
+                "navigation": navigation,
+            }
+        )
+    feed = _opds_feed(title, feed_id)
+    if searchable:
+        _opds_add_search_link(feed)
+    for item in navigation:
+        _opds_add_navigation_entry(
+            feed,
+            item["title"],
+            item["href"],
+            entry_id=item.get("id", ""),
+        )
+    return _opds_response(feed)
+
+
+def _opds_empty_response(request: Request, title: str, feed_id: str) -> Response | JSONResponse:
+    if _wants_opds_json(request):
+        return _opds_json_response(
+            {
+                "metadata": {"title": title, "numberOfItems": 0},
+                "links": [{"rel": "self", "href": _opds_href(feed_id), "type": "application/opds+json"}],
+                "publications": [],
+            }
+        )
+    return _opds_response(_opds_feed(title, feed_id))
+
+
+def _opds_books_response(
+    request: Request, title: str, feed_id: str, books: list[Book]
+) -> Response | JSONResponse:
+    if _wants_opds_json(request):
+        return _opds_json_response(
+            {
+                "metadata": {"title": title, "numberOfItems": len(books)},
+                "links": [
+                    {"rel": "self", "href": _opds_href(feed_id), "type": "application/opds+json"},
+                    *_opds_library_search_links(),
+                ],
+                "publications": [_opds_json_publication(book) for book in books],
+            }
+        )
+    feed = _opds_feed(title, feed_id)
+    _opds_add_library_search_link(feed)
+    for book in books:
+        _opds_add_book_entry(feed, book)
+    return _opds_response(feed)
+
+
+def _discovery_item_values(item) -> dict:
+    if isinstance(item, Book):
+        try:
+            isbns = json.loads(item.isbns_json or "[]")
+        except (TypeError, ValueError):
+            isbns = []
+        return {
+            "title": item.title,
+            "author": item.primary_author,
+            "authors": [item.primary_author],
+            "isbn": isbns[0] if isbns else "",
+            "cover_url": f"/books/{item.id}/cover" if item.cover_path else "",
+            "description": item.description or "",
+            "source": "digest",
+            "source_id": item.id,
+            "published": item.publication_date or "",
+            "language": item.language or "",
+        }
+    if isinstance(item, dict):
+        authors = item.get("authors") or []
+        author = item.get("author") or (authors[0] if authors else "")
+        return {
+            "title": str(item.get("title") or ""),
+            "author": str(author or ""),
+            "authors": authors,
+            "isbn": str(item.get("isbn") or ""),
+            "cover_url": str(item.get("cover_url") or ""),
+            "description": str(item.get("description") or ""),
+            "source": str(item.get("source") or ""),
+            "source_id": str(item.get("source_id") or ""),
+            "published": str(item.get("published") or item.get("published_year") or ""),
+            "language": str(item.get("language") or ""),
+        }
+    try:
+        authors = json.loads(item.authors_json or "[]")
+    except (TypeError, ValueError):
+        authors = []
+    return {
+        "title": item.title,
+        "author": authors[0] if authors else "",
+        "authors": authors,
+        "isbn": "",
+        "cover_url": item.cover_url or "",
+        "description": "",
+        "source": item.provider,
+        "source_id": item.source_id,
+        "published": item.publication_date or "",
+        "language": "",
+    }
+
+
+def _opds_add_discovery_entry(feed: Element, db: Session, item) -> None:
+    if isinstance(item, Book):
+        return
+    values = _discovery_item_values(item)
+    title = values["title"] or "Untitled"
+    author_name = values["author"]
+    owned = find_library_book(db, title=title, author=author_name, isbn=values["isbn"])
+    if owned is not None:
+        return
+
+    entry = SubElement(feed, "entry")
+    SubElement(entry, "id").text = ":".join(
+        part for part in ("digest", values["source"], values["source_id"], title) if part
+    )
+    SubElement(entry, "title").text = title
+    SubElement(entry, "updated").text = datetime.now(UTC).isoformat()
+    for name in values["authors"] or [author_name]:
+        author = SubElement(entry, "author")
+        SubElement(author, "name").text = str(name)
+        SubElement(entry, f"{{{DC_NS}}}creator").text = str(name)
+    if values["isbn"]:
+        SubElement(entry, f"{{{DC_NS}}}identifier").text = f"urn:isbn:{values['isbn']}"
+    if values["source_id"]:
+        SubElement(entry, f"{{{DC_NS}}}identifier").text = values["source_id"]
+    if values["published"]:
+        SubElement(entry, "published").text = values["published"]
+        SubElement(entry, f"{{{DC_NS}}}issued").text = values["published"]
+    if values["language"]:
+        SubElement(entry, f"{{{DC_NS}}}language").text = values["language"]
+    if values["description"]:
+        description = plain_text(values["description"])
+        SubElement(entry, "summary", type="text").text = description
+        SubElement(entry, "content", type="text").text = description
+    if values["cover_url"]:
+        href = _opds_href(values["cover_url"])
+        SubElement(entry, "link", rel="http://opds-spec.org/image", href=href, type="image/jpeg")
+        SubElement(
+            entry,
+            "link",
+            rel="http://opds-spec.org/image/thumbnail",
+            href=href,
+            type="image/jpeg",
+        )
+    SubElement(
+        entry,
+        "link",
+        rel="alternate",
+        href=_opds_href(discovery_book_url(values)),
+        type="text/html",
+    )
+    SubElement(
+        entry,
+        "link",
+        rel="http://opds-spec.org/acquisition",
+        href=_opds_discovery_request_url(values),
+        type="text/plain",
+        title="Request download",
+    )
+
+
+def _opds_json_discovery_publication(db: Session, item) -> dict:
+    if isinstance(item, Book):
+        return {}
+    values = _discovery_item_values(item)
+    title = values["title"] or "Untitled"
+    author_name = values["author"]
+    owned = find_library_book(db, title=title, author=author_name, isbn=values["isbn"])
+    if owned is not None:
+        return {}
+    metadata: dict = {
+        "title": title,
+        "author": ", ".join(str(name) for name in (values["authors"] or [author_name]) if str(name)),
+    }
+    identifiers = []
+    if values["isbn"]:
+        identifiers.append(f"urn:isbn:{values['isbn']}")
+    if values["source_id"]:
+        identifiers.append(values["source_id"])
+    if identifiers:
+        metadata["identifier"] = identifiers[0] if len(identifiers) == 1 else identifiers
+    if values["description"]:
+        metadata["description"] = plain_text(values["description"])
+    if values["published"]:
+        metadata["published"] = values["published"]
+    if values["language"]:
+        metadata["language"] = values["language"]
+    publication = {
+        "metadata": metadata,
+        "links": [
+            {
+                "rel": "alternate",
+                "href": _opds_href(discovery_book_url(values)),
+                "type": "text/html",
+                "title": "View in Digest",
+            },
+            {
+                "rel": "http://opds-spec.org/acquisition",
+                "href": _opds_discovery_request_url(values),
+                "type": "text/plain",
+                "title": "Request download",
+            }
+        ],
+    }
+    if values["cover_url"]:
+        publication["images"] = [
+            {
+                "rel": "http://opds-spec.org/image",
+                "href": _opds_href(values["cover_url"]),
+                "type": "image/jpeg",
+            },
+            {
+                "rel": "http://opds-spec.org/image/thumbnail",
+                "href": _opds_href(values["cover_url"]),
+                "type": "image/jpeg",
+            },
+        ]
+    return publication
+
+
+def _opds_available_discovery_items(db: Session, items) -> list:
+    available = []
+    owned_count = 0
+    for item in items:
+        if isinstance(item, Book):
+            continue
+        values = _discovery_item_values(item)
+        if find_library_book(
+            db,
+            title=values["title"],
+            author=values["author"],
+            isbn=values["isbn"],
+        ) is None:
+            available.append(item)
+        else:
+            owned_count += 1
+    source_count = len(items or [])
+    if source_count and not available:
+        logger.warning(
+            "OPDS discovery availability filtered all items source_items=%d owned_filtered=%d",
+            source_count,
+            owned_count,
+        )
+    else:
+        logger.info(
+            "OPDS discovery availability source_items=%d available=%d owned_filtered=%d",
+            source_count,
+            len(available),
+            owned_count,
+        )
+    return available
+
+
+def _opds_dedupe_discovery_items(items) -> list:
+    seen: set[tuple[str, str, str, str]] = set()
+    results = []
+    for item in items:
+        values = _discovery_item_values(item)
+        key = (
+            values["source"].casefold(),
+            values["source_id"].casefold(),
+            values["title"].casefold(),
+            values["author"].casefold(),
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        results.append(item)
+    return results
+
+
+def _opds_genre_navigation(base_href: str) -> list[dict]:
+    return [
+        _opds_json_link(
+            GENRES.get(genre_slug, genre_slug.replace("_", " ").title()),
+            f"{base_href}/{quote(genre_slug, safe='')}",
+        )
+        for genre_slug in OPDS_DISCOVER_GENRES
+    ]
+
+
+def _opds_period_navigation(base_href: str, periods: dict[str, tuple[str, int | None]]) -> list[dict]:
+    return [
+        _opds_json_link(label, f"{base_href}/{quote(key, safe='')}")
+        for key, (label, _) in periods.items()
+    ]
+
+
+def _opds_wanted_status_publication(item: WantedItem) -> dict:
+    status = item.status.value if hasattr(item.status, "value") else str(item.status)
+    metadata = {
+        "title": item.title,
+        "author": item.author or "",
+        "subtitle": f"Download status: {status}",
+        "identifier": f"digest:wanted:{item.id}",
+    }
+    if item.isbn:
+        metadata["identifier"] = [metadata["identifier"], f"urn:isbn:{item.isbn}"]
+    publication = {
+        "metadata": metadata,
+        "links": [
+            {
+                "rel": "alternate",
+                "href": "/wanted",
+                "type": "text/html",
+                "title": "View download queue",
+            }
+        ],
+    }
+    if item.cover_url:
+        publication["images"] = [
+            {
+                "rel": "http://opds-spec.org/image",
+                "href": _opds_href(item.cover_url),
+                "type": "image/jpeg",
+            },
+            {
+                "rel": "http://opds-spec.org/image/thumbnail",
+                "href": _opds_href(item.cover_url),
+                "type": "image/jpeg",
+            },
+        ]
+    return publication
+
+
+def _opds_wanted_payload(db: Session, item: WantedItem) -> dict:
+    releases = list(
+        db.scalars(
+            select(AcquisitionRelease)
+            .where(AcquisitionRelease.wanted_id == item.id)
+            .order_by(AcquisitionRelease.match_score.desc())
+        )
+    )
+    return {
+        "id": item.id,
+        "title": item.title,
+        "author": item.author or "",
+        "status": item.status.value if hasattr(item.status, "value") else str(item.status),
+        "last_error": item.last_error or "",
+        "acquired_book_id": item.acquired_book_id,
+        "selected_release_id": item.selected_release_id,
+        "releases": [
+            {
+                "id": release.id,
+                "title": release.title,
+                "format": release.format,
+                "size_bytes": release.size_bytes,
+                "score": release.match_score,
+            }
+            for release in releases
+        ],
+    }
+
+
+def _opds_review_books(db: Session) -> list[Book]:
+    return list(
+        db.scalars(
+            select(Book)
+            .where(Book.review_state.in_([ReviewState.REVIEW, ReviewState.REJECTED, ReviewState.ERROR]))
+            .order_by(Book.created_at.desc(), Book.id)
+        )
+    )
+
+
+def _opds_review_payload(book: Book) -> dict:
+    return {
+        "id": book.id,
+        "title": book.title,
+        "author": book.primary_author,
+        "status": book.review_state.value if hasattr(book.review_state, "value") else str(book.review_state),
+        "reason": book.review_reason or "",
+    }
+
+
+def _require_opds_admin(request: Request, db: Session) -> User:
+    user = _require_opds_user(request, db)
+    if user.role != Role.ADMIN:
+        raise HTTPException(403)
+    return user
+
+
+def _opds_add_download_status_entry(feed: Element, db: Session, item: WantedItem) -> None:
+    entry = SubElement(feed, "entry")
+    status = item.status.value if hasattr(item.status, "value") else str(item.status)
+    SubElement(entry, "id").text = f"digest:wanted:{item.id}"
+    SubElement(entry, "title").text = item.title
+    SubElement(entry, "updated").text = item.updated_at.isoformat()
+    if item.author:
+        author = SubElement(entry, "author")
+        SubElement(author, "name").text = item.author
+    summary = f"Download status: {status}"
+    if item.last_error:
+        summary += f"\n\n{item.last_error}"
+    book = db.get(Book, item.acquired_book_id) if item.acquired_book_id else None
+    if book is not None and book.review_state != ReviewState.READY:
+        summary += "\n\nMetadata review required."
+        SubElement(
+            entry,
+            "link",
+            rel="subsection",
+            href=f"/opds/downloads/review/{book.id}",
+            type="application/atom+xml;profile=opds-catalog",
+            title="Review metadata",
+        )
+    SubElement(entry, "summary", type="text").text = summary
+    SubElement(entry, "link", rel="alternate", href="/wanted", type="text/html")
+
+
+def _opds_json_download_status_publication(db: Session, item: WantedItem) -> dict:
+    payload = _opds_wanted_payload(db, item)
+    metadata = {
+        "title": payload["title"],
+        "author": payload["author"],
+        "subtitle": f"Download status: {payload['status']}",
+        "identifier": f"digest:wanted:{item.id}",
+    }
+    if payload["last_error"]:
+        metadata["description"] = payload["last_error"]
+    links = [{"rel": "alternate", "href": "/wanted", "type": "text/html", "title": "View downloads"}]
+    book = db.get(Book, item.acquired_book_id) if item.acquired_book_id else None
+    if book is not None and book.review_state != ReviewState.READY:
+        metadata["description"] = (metadata.get("description", "") + "\n\nMetadata review required.").strip()
+        links.append(
+            {
+                "rel": "subsection",
+                "href": _opds_href(f"/opds/downloads/review/{book.id}"),
+                "type": "application/opds+json",
+                "title": "Review metadata",
+            }
+        )
+    return {"metadata": metadata, "links": links}
+
+
+def _opds_add_review_entry(feed: Element, book: Book) -> None:
+    entry = SubElement(feed, "entry")
+    SubElement(entry, "id").text = f"digest:review:{book.id}"
+    SubElement(entry, "title").text = book.title
+    SubElement(entry, "updated").text = book.updated_at.isoformat()
+    if book.primary_author:
         author = SubElement(entry, "author")
         SubElement(author, "name").text = book.primary_author
-        media_types = {
-            "epub": "application/epub+zip",
-            "kepub": "application/epub+zip",
-            "mobi": "application/x-mobipocket-ebook",
-            "azw3": "application/vnd.amazon.ebook",
+    SubElement(entry, "summary", type="text").text = (
+        f"Metadata review: {book.review_state.value}\n\n{book.review_reason or ''}".strip()
+    )
+    SubElement(
+        entry,
+        "link",
+        rel="subsection",
+        href=f"/opds/downloads/review/{book.id}",
+        type="application/atom+xml;profile=opds-catalog",
+        title="Review metadata",
+    )
+
+
+def _opds_json_action_response(title: str, message: str) -> JSONResponse:
+    return _opds_json_response(
+        {
+            "metadata": {"title": title, "numberOfItems": 1},
+            "navigation": [_opds_json_link(message, "/opds/downloads")],
         }
-        for item in book.files:
-            SubElement(
-                entry,
-                "link",
-                rel="http://opds-spec.org/acquisition",
-                href=f"{settings.public_url}/books/{book.id}/file/{item.id}",
-                type=media_types.get(item.format, "application/octet-stream"),
+    )
+
+
+def _opds_json_review_publication(book: Book) -> dict:
+    return {
+        "metadata": {
+            "title": book.title,
+            "author": book.primary_author,
+            "subtitle": f"Metadata review: {book.review_state.value}",
+            "identifier": f"digest:review:{book.id}",
+            "description": book.review_reason or "",
+        },
+        "links": [
+            {
+                "rel": "subsection",
+                "href": _opds_href(f"/opds/downloads/review/{book.id}"),
+                "type": "application/opds+json",
+                "title": "Review metadata",
+            }
+        ],
+    }
+
+
+def _opds_add_wanted_status_entry(feed: Element, item: WantedItem) -> None:
+    status = item.status.value if hasattr(item.status, "value") else str(item.status)
+    entry = SubElement(feed, "entry")
+    SubElement(entry, "id").text = f"digest:wanted:{item.id}"
+    SubElement(entry, "title").text = item.title
+    SubElement(entry, "updated").text = item.updated_at.isoformat()
+    if item.author:
+        author = SubElement(entry, "author")
+        SubElement(author, "name").text = item.author
+        SubElement(entry, f"{{{DC_NS}}}creator").text = item.author
+    if item.isbn:
+        SubElement(entry, f"{{{DC_NS}}}identifier").text = f"urn:isbn:{item.isbn}"
+    SubElement(entry, "summary", type="text").text = f"Download status: {status}"
+    if item.cover_url:
+        href = _opds_href(item.cover_url)
+        SubElement(entry, "link", rel="http://opds-spec.org/image", href=href, type="image/jpeg")
+        SubElement(
+            entry,
+            "link",
+            rel="http://opds-spec.org/image/thumbnail",
+            href=href,
+            type="image/jpeg",
+        )
+    SubElement(entry, "link", rel="alternate", href="/wanted", type="text/html")
+
+
+def _opds_search_status_response(
+    request: Request,
+    db: Session,
+    user: User,
+    title: str,
+    feed_id: str,
+    search_results=None,
+) -> Response | JSONResponse:
+    wanted_items = list(
+        db.scalars(
+            select(WantedItem)
+            .where(
+                WantedItem.user_id == user.id,
+                WantedItem.status != WantedStatus.CANCELLED,
             )
+            .order_by(WantedItem.updated_at.desc(), WantedItem.id.desc())
+            .limit(25)
+        )
+    )
+    results = _opds_available_discovery_items(db, search_results or [])
+    if _wants_opds_json(request):
+        publications = [
+            publication
+            for publication in (_opds_json_discovery_publication(db, item) for item in results)
+            if publication
+        ]
+        publications.extend(_opds_wanted_status_publication(item) for item in wanted_items)
+        return _opds_json_response(
+            {
+                "metadata": {"title": title, "numberOfItems": len(publications)},
+                "links": [
+                    {"rel": "self", "href": _opds_href(feed_id), "type": "application/opds+json"},
+                    *_opds_discovery_search_links(),
+                ],
+                "publications": publications,
+            }
+        )
+    feed = _opds_feed(title, feed_id)
+    _opds_add_search_link(feed)
+    for item in results:
+        _opds_add_discovery_entry(feed, db, item)
+    for item in wanted_items:
+        _opds_add_wanted_status_entry(feed, item)
+    return _opds_response(feed)
+
+
+def _opds_discovery_search_links() -> list[dict]:
+    return [
+        {
+            "rel": "search",
+            "href": "/opds/discover/search?query={searchTerms}",
+            "type": "application/opds+json",
+            "templated": True,
+        }
+    ]
+
+
+def _opds_download_status_links() -> list[dict]:
+    return [
+        {
+            "rel": "subsection",
+            "href": "/opds/downloads",
+            "type": "application/opds+json",
+            "title": "Download Status",
+        }
+    ]
+
+
+def _opds_library_search_links() -> list[dict]:
+    return [
+        {
+            "rel": "search",
+            "href": "/opds/search?query={searchTerms}",
+            "type": "application/opds+json",
+            "templated": True,
+        }
+    ]
+
+
+def _opds_add_search_link(feed: Element) -> None:
+    SubElement(
+        feed,
+        "link",
+        rel="search",
+        href="/opds/discover/search.xml",
+        type="application/opensearchdescription+xml",
+        title="Digest Discover Search",
+    )
+    SubElement(
+        feed,
+        "link",
+        rel="search",
+        href="/opds/discover/search?query={searchTerms}",
+        type="application/atom+xml;profile=opds-catalog",
+    )
+
+
+def _opds_add_library_search_link(feed: Element) -> None:
+    SubElement(
+        feed,
+        "link",
+        rel="search",
+        href="/opds/search.xml",
+        type="application/opensearchdescription+xml",
+        title="Digest Library Search",
+    )
+    SubElement(
+        feed,
+        "link",
+        rel="search",
+        href="/opds/search?query={searchTerms}",
+        type="application/atom+xml;profile=opds-catalog",
+    )
+
+
+def _opds_discovery_response(
+    request: Request, db: Session, title: str, feed_id: str, items
+) -> Response | JSONResponse:
+    items = _opds_available_discovery_items(db, items)
+    if _wants_opds_json(request):
+        return _opds_json_response(
+            {
+                "metadata": {"title": title, "numberOfItems": len(items)},
+                "links": [
+                    {"rel": "self", "href": _opds_href(feed_id), "type": "application/opds+json"},
+                    *_opds_discovery_search_links(),
+                ],
+                "publications": [
+                    publication
+                    for publication in (_opds_json_discovery_publication(db, item) for item in items)
+                    if publication
+                ],
+            }
+        )
+    feed = _opds_feed(title, feed_id)
+    _opds_add_search_link(feed)
+    for item in items:
+        _opds_add_discovery_entry(feed, db, item)
+    return _opds_response(feed)
+
+
+@app.get("/opds/", include_in_schema=False)
+@app.get("/opds")
+def opds(
+    request: Request,
+    db: Annotated[Session, Depends(get_db)],
+    catalog: str = "",
+    author: str = "",
+    series: str = "",
+    genre: str = "fantasy",
+    period: str = "now",
+    q: str = "",
+    query: str = "",
+):
+    if catalog == "title":
+        return opds_title(request, db)
+    if catalog == "latest":
+        return opds_latest(request, db)
+    if catalog == "authors":
+        return opds_authors(request, db)
+    if catalog == "author":
+        return opds_author(request, db, author)
+    if catalog == "series":
+        return opds_series(request, db)
+    if catalog == "series-books":
+        return opds_series_books(request, db, series)
+    if catalog == "discover":
+        return opds_discover(request, db)
+    if catalog == "discover-trending":
+        return opds_discover_trending(request, db, period=period, genre=genre)
+    if catalog == "discover-new-releases":
+        return opds_discover_new_releases(request, db, genre=genre)
+    if catalog == "discover-search":
+        return opds_discover_search(request, db, q=q, query=query)
+    if catalog == "search":
+        return opds_search(request, db, q=q, query=query)
+
+    _require_opds_user(request, db)
+    navigation = [
+        _opds_json_link("By Title", "/opds/catalog/title"),
+        _opds_json_link("By Author", "/opds/catalog/authors-v2"),
+        _opds_json_link("Latest", "/opds/catalog/latest"),
+        _opds_json_link("By Series", "/opds/catalog/series"),
+        _opds_json_link("Discover", "/opds/discover"),
+        _opds_json_link("Downloads", "/opds/downloads"),
+    ]
+    if _wants_opds_json(request):
+        return _opds_json_response(
+            {
+                "metadata": {"title": "Digest Library Catalog"},
+                "links": [{"rel": "self", "href": "/opds", "type": "application/opds+json"}],
+                "navigation": navigation,
+            }
+        )
+    feed = _opds_feed("Digest Library Catalog", settings.public_url + "/opds")
+    _opds_add_navigation_entry(feed, "By Title", "/opds/catalog/title")
+    _opds_add_navigation_entry(feed, "By Author", "/opds/catalog/authors-v2")
+    _opds_add_navigation_entry(feed, "Latest", "/opds/catalog/latest")
+    _opds_add_navigation_entry(feed, "By Series", "/opds/catalog/series")
+    _opds_add_navigation_entry(feed, "Discover", "/opds/discover")
+    _opds_add_navigation_entry(feed, "Downloads", "/opds/downloads")
+    return _opds_response(feed)
+
+
+@app.get("/opds/search/", include_in_schema=False)
+@app.get("/opds/search")
+def opds_search(
+    request: Request,
+    db: Annotated[Session, Depends(get_db)],
+    q: str = "",
+    query: str = "",
+):
+    _require_opds_user(request, db)
+    search_query = (q or query).strip()
+    if not search_query:
+        return _opds_books_response(
+            request,
+            "Digest Library - Search",
+            settings.public_url + "/opds/search",
+            [],
+        )
+    like = f"%{search_query.casefold()}%"
+    books = list(
+        db.scalars(
+            select(Book)
+            .where(
+                Book.review_state == ReviewState.READY,
+                or_(
+                    func.lower(Book.title).like(like),
+                    func.lower(Book.sort_title).like(like),
+                    func.lower(Book.primary_author).like(like),
+                    func.lower(Book.series).like(like),
+                ),
+            )
+            .order_by(func.lower(Book.sort_title), func.lower(Book.title), Book.id)
+        )
+    )
+    return _opds_books_response(
+        request,
+        f"Digest Library - Search: {search_query}",
+        settings.public_url + f"/opds/search?{urlencode({'query': search_query})}",
+        books,
+    )
+
+
+@app.get("/opds/search.xml", include_in_schema=False)
+def opds_search_descriptor(request: Request, db: Annotated[Session, Depends(get_db)]):
+    _require_opds_user(request, db)
+    description = Element(f"{{{OS_NS}}}OpenSearchDescription")
+    SubElement(description, "ShortName").text = "Digest Library"
+    SubElement(description, "Description").text = "Search Digest Library by title or author"
+    SubElement(
+        description,
+        "Url",
+        type="application/atom+xml;profile=opds-catalog;kind=acquisition",
+        template=_opds_href("/opds/search?query={searchTerms}"),
+    )
+    SubElement(
+        description,
+        "Url",
+        type="application/opds+json",
+        template=_opds_href("/opds/search?query={searchTerms}"),
+    )
+    return _opensearch_response(description)
+
+
+@app.get("/opds/catalog/title/", include_in_schema=False)
+@app.get("/opds/catalog/title")
+@app.get("/opds/title/", include_in_schema=False)
+@app.get("/opds/title")
+def opds_title(request: Request, db: Annotated[Session, Depends(get_db)]):
+    _require_opds_user(request, db)
+    books = list(
+        db.scalars(
+            select(Book)
+            .where(Book.review_state == ReviewState.READY)
+            .order_by(func.lower(Book.sort_title), func.lower(Book.title), Book.id)
+        )
+    )
+    return _opds_books_response(
+        request, "Digest Library - By Title", settings.public_url + "/opds/title", books
+    )
+
+
+@app.get("/opds/catalog/latest/", include_in_schema=False)
+@app.get("/opds/catalog/latest")
+@app.get("/opds/latest/", include_in_schema=False)
+@app.get("/opds/latest")
+def opds_latest(request: Request, db: Annotated[Session, Depends(get_db)]):
+    _require_opds_user(request, db)
+    books = list(
+        db.scalars(
+            select(Book)
+            .where(Book.review_state == ReviewState.READY)
+            .order_by(Book.created_at.desc(), func.lower(Book.title), Book.id)
+        )
+    )
+    return _opds_books_response(
+        request, "Digest Library - Latest", settings.public_url + "/opds/latest", books
+    )
+
+
+@app.get("/opds/catalog/authors-v2/", include_in_schema=False)
+@app.get("/opds/catalog/authors-v2")
+@app.get("/opds/catalog/authors/", include_in_schema=False)
+@app.get("/opds/catalog/authors")
+@app.get("/opds/authors/", include_in_schema=False)
+@app.get("/opds/authors")
+def opds_authors(request: Request, db: Annotated[Session, Depends(get_db)]):
+    _require_opds_user(request, db)
+    feed = _opds_feed("Digest Library - By Author", settings.public_url + "/opds/authors")
+    rows = db.execute(
+        select(Book.primary_author, func.count(Book.id))
+        .where(Book.review_state == ReviewState.READY)
+        .group_by(Book.primary_author)
+        .order_by(func.lower(Book.primary_author))
+    ).all()
+    if _wants_opds_json(request):
+        return _opds_json_response(
+            {
+                "metadata": {"title": "Digest Library - By Author", "numberOfItems": len(rows)},
+                "links": [
+                    {"rel": "self", "href": "/opds?catalog=authors", "type": "application/opds+json"}
+                ],
+                "navigation": [
+                    _opds_json_link(
+                        author,
+                        f"/opds/author-group/{quote(author, safe='')}"
+                        if count == 1 else f"/opds/author/{quote(author, safe='')}",
+                        count=count,
+                    )
+                    for author, count in rows
+                ],
+            }
+        )
+    for author, count in rows:
+        label = f"{author} ({count})"
+        _opds_add_navigation_entry(
+            feed,
+            label,
+            f"/opds/author-group/{quote(author, safe='')}"
+            if count == 1 else f"/opds/author/{quote(author, safe='')}",
+            entry_id=f"digest:author:{author}",
+        )
+    return _opds_response(feed)
+
+
+@app.get("/opds/author-group/{author}/", include_in_schema=False)
+@app.get("/opds/author-group/{author}")
+def opds_author_group(request: Request, db: Annotated[Session, Depends(get_db)], author: str):
+    _require_opds_user(request, db)
+    book_href = f"/opds/author/{quote(author, safe='')}"
+    info_href = f"/opds/author-group/{quote(author, safe='')}/about"
+    if _wants_opds_json(request):
+        return _opds_json_response(
+            {
+                "metadata": {"title": author},
+                "links": [
+                    {
+                        "rel": "self",
+                        "href": f"/opds/author-group/{quote(author, safe='')}",
+                        "type": "application/opds+json",
+                    }
+                ],
+                "navigation": [
+                    _opds_json_link(f"Books by {author}", book_href),
+                    _opds_json_link("Author info", info_href),
+                ],
+            }
+        )
+    feed = _opds_feed(author, settings.public_url + f"/opds/author-group/{quote(author, safe='')}")
+    _opds_add_navigation_entry(feed, f"Books by {author}", book_href)
+    _opds_add_navigation_entry(feed, "Author info", info_href)
+    return _opds_response(feed)
+
+
+@app.get("/opds/author-group/{author}/about/", include_in_schema=False)
+@app.get("/opds/author-group/{author}/about")
+def opds_author_group_about(
+    request: Request, db: Annotated[Session, Depends(get_db)], author: str
+):
+    _require_opds_user(request, db)
+    if _wants_opds_json(request):
+        return _opds_json_response(
+            {
+                "metadata": {"title": f"Author info - {author}", "numberOfItems": 1},
+                "links": [
+                    {
+                        "rel": "self",
+                        "href": f"/opds/author-group/{quote(author, safe='')}/about",
+                        "type": "application/opds+json",
+                    }
+                ],
+                "publications": [
+                    _opds_json_virtual_publication(
+                        "Author info",
+                        author,
+                        "This entry keeps the author available as a folder in Bookshelf.",
+                    )
+                ],
+            }
+        )
+    feed = _opds_feed(
+        f"Author info - {author}",
+        settings.public_url + f"/opds/author-group/{quote(author, safe='')}/about",
+    )
+    entry = SubElement(feed, "entry")
+    SubElement(entry, "id").text = f"digest:author-info:{author}"
+    SubElement(entry, "title").text = "Author info"
+    SubElement(entry, "updated").text = datetime.now(UTC).isoformat()
+    person = SubElement(entry, "author")
+    SubElement(person, "name").text = author
+    SubElement(entry, "summary", type="text").text = (
+        "This entry keeps the author available as a folder in Bookshelf."
+    )
+    return _opds_response(feed)
+
+
+@app.get("/opds/author-folder/{author}/", include_in_schema=False)
+@app.get("/opds/author-folder/{author}")
+def opds_author_folder(request: Request, db: Annotated[Session, Depends(get_db)], author: str):
+    _require_opds_user(request, db)
+    book_href = f"/opds/author/{quote(author, safe='')}"
+    info_href = f"/opds/author-folder/{quote(author, safe='')}/info"
+    if _wants_opds_json(request):
+        return _opds_json_response(
+            {
+                "metadata": {"title": author},
+                "links": [
+                    {
+                        "rel": "self",
+                        "href": f"/opds/author-folder/{quote(author, safe='')}",
+                        "type": "application/opds+json",
+                    }
+                ],
+                "navigation": [
+                    _opds_json_link(f"Books by {author}", book_href),
+                    _opds_json_link("About this author", info_href),
+                ],
+            }
+        )
+    feed = _opds_feed(author, settings.public_url + f"/opds/author-folder/{quote(author, safe='')}")
+    _opds_add_navigation_entry(feed, f"Books by {author}", book_href)
+    _opds_add_navigation_entry(feed, "About this author", info_href)
+    return _opds_response(feed)
+
+
+@app.get("/opds/author-folder/{author}/info/", include_in_schema=False)
+@app.get("/opds/author-folder/{author}/info")
+def opds_author_folder_info(request: Request, db: Annotated[Session, Depends(get_db)], author: str):
+    _require_opds_user(request, db)
+    return _opds_empty_response(
+        request,
+        f"About {author}",
+        settings.public_url + f"/opds/author-folder/{quote(author, safe='')}/info",
+    )
+
+
+@app.get("/opds/author/{author}/index/", include_in_schema=False)
+@app.get("/opds/author/{author}/index")
+def opds_author_index(request: Request, db: Annotated[Session, Depends(get_db)], author: str):
+    _require_opds_user(request, db)
+    href = f"/opds/author/{quote(author, safe='')}"
+    if _wants_opds_json(request):
+        return _opds_json_response(
+            {
+                "metadata": {"title": author},
+                "links": [
+                    {
+                        "rel": "self",
+                        "href": f"/opds/author/{quote(author, safe='')}/index",
+                        "type": "application/opds+json",
+                    }
+                ],
+                "navigation": [_opds_json_link(f"All books by {author}", href)],
+            }
+        )
+    feed = _opds_feed(author, settings.public_url + f"/opds/author/{quote(author, safe='')}/index")
+    _opds_add_navigation_entry(feed, f"All books by {author}", href)
+    return _opds_response(feed)
+
+
+@app.get("/opds/author/{author}/", include_in_schema=False)
+@app.get("/opds/author/{author}")
+@app.get("/opds/author/", include_in_schema=False)
+@app.get("/opds/author")
+def opds_author(request: Request, db: Annotated[Session, Depends(get_db)], author: str):
+    _require_opds_user(request, db)
+    books = list(
+        db.scalars(
+            select(Book)
+            .where(
+                Book.review_state == ReviewState.READY,
+                func.lower(Book.primary_author) == author.casefold(),
+            )
+            .order_by(func.lower(Book.sort_title), func.lower(Book.title), Book.id)
+        )
+    )
+    return _opds_books_response(
+        request,
+        f"Digest Library - {author}",
+        settings.public_url + f"/opds/author?{urlencode({'author': author})}",
+        books,
+    )
+
+
+@app.get("/opds/catalog/series/", include_in_schema=False)
+@app.get("/opds/catalog/series")
+@app.get("/opds/series/", include_in_schema=False)
+@app.get("/opds/series")
+def opds_series(request: Request, db: Annotated[Session, Depends(get_db)]):
+    _require_opds_user(request, db)
+    feed = _opds_feed("Digest Library - By Series", settings.public_url + "/opds/series")
+    rows = db.execute(
+        select(Book.series, func.count(Book.id))
+        .where(Book.review_state == ReviewState.READY, Book.series.is_not(None), Book.series != "")
+        .group_by(Book.series)
+        .order_by(func.lower(Book.series))
+    ).all()
+    if _wants_opds_json(request):
+        return _opds_json_response(
+            {
+                "metadata": {"title": "Digest Library - By Series", "numberOfItems": len(rows)},
+                "links": [
+                    {"rel": "self", "href": "/opds?catalog=series", "type": "application/opds+json"}
+                ],
+                "navigation": [
+                    _opds_json_link(
+                        series,
+                        f"/opds/series-folder/{quote(series, safe='')}"
+                        if count == 1 else f"/opds/series/{quote(series, safe='')}",
+                        count=count,
+                    )
+                    for series, count in rows
+                ],
+            }
+        )
+    for series, count in rows:
+        label = f"{series} ({count})"
+        _opds_add_navigation_entry(
+            feed,
+            label,
+            f"/opds/series-folder/{quote(series, safe='')}"
+            if count == 1 else f"/opds/series/{quote(series, safe='')}",
+            entry_id=f"digest:series:{series}",
+        )
+    return _opds_response(feed)
+
+
+@app.get("/opds/series-folder/{series}/", include_in_schema=False)
+@app.get("/opds/series-folder/{series}")
+def opds_series_folder(request: Request, db: Annotated[Session, Depends(get_db)], series: str):
+    _require_opds_user(request, db)
+    book_href = f"/opds/series/{quote(series, safe='')}"
+    info_href = f"/opds/series-folder/{quote(series, safe='')}/info"
+    if _wants_opds_json(request):
+        return _opds_json_response(
+            {
+                "metadata": {"title": series},
+                "links": [
+                    {
+                        "rel": "self",
+                        "href": f"/opds/series-folder/{quote(series, safe='')}",
+                        "type": "application/opds+json",
+                    }
+                ],
+                "navigation": [
+                    _opds_json_link(f"Books in {series}", book_href),
+                    _opds_json_link("About this series", info_href),
+                ],
+            }
+        )
+    feed = _opds_feed(series, settings.public_url + f"/opds/series-folder/{quote(series, safe='')}")
+    _opds_add_navigation_entry(feed, f"Books in {series}", book_href)
+    _opds_add_navigation_entry(feed, "About this series", info_href)
+    return _opds_response(feed)
+
+
+@app.get("/opds/series-folder/{series}/info/", include_in_schema=False)
+@app.get("/opds/series-folder/{series}/info")
+def opds_series_folder_info(request: Request, db: Annotated[Session, Depends(get_db)], series: str):
+    _require_opds_user(request, db)
+    return _opds_empty_response(
+        request,
+        f"About {series}",
+        settings.public_url + f"/opds/series-folder/{quote(series, safe='')}/info",
+    )
+
+
+@app.get("/opds/series/{series}/index/", include_in_schema=False)
+@app.get("/opds/series/{series}/index")
+def opds_series_index(request: Request, db: Annotated[Session, Depends(get_db)], series: str):
+    _require_opds_user(request, db)
+    href = f"/opds/series/{quote(series, safe='')}"
+    if _wants_opds_json(request):
+        return _opds_json_response(
+            {
+                "metadata": {"title": series},
+                "links": [
+                    {
+                        "rel": "self",
+                        "href": f"/opds/series/{quote(series, safe='')}/index",
+                        "type": "application/opds+json",
+                    }
+                ],
+                "navigation": [_opds_json_link(f"All books in {series}", href)],
+            }
+        )
+    feed = _opds_feed(series, settings.public_url + f"/opds/series/{quote(series, safe='')}/index")
+    _opds_add_navigation_entry(feed, f"All books in {series}", href)
+    return _opds_response(feed)
+
+
+@app.get("/opds/series/{series}/", include_in_schema=False)
+@app.get("/opds/series/{series}")
+@app.get("/opds/series/books/", include_in_schema=False)
+@app.get("/opds/series/books")
+def opds_series_books(request: Request, db: Annotated[Session, Depends(get_db)], series: str):
+    _require_opds_user(request, db)
+    books = list(
+        db.scalars(
+            select(Book)
+            .where(
+                Book.review_state == ReviewState.READY,
+                func.lower(Book.series) == series.casefold(),
+            )
+            .order_by(Book.series_number, func.lower(Book.sort_title), func.lower(Book.title), Book.id)
+        )
+    )
+    return _opds_books_response(
+        request,
+        f"Digest Library - {series}",
+        settings.public_url + f"/opds/series/books?{urlencode({'series': series})}",
+        books,
+    )
+
+
+@app.get("/opds/downloads/", include_in_schema=False)
+@app.get("/opds/downloads")
+def opds_downloads(request: Request, db: Annotated[Session, Depends(get_db)]):
+    user = _require_opds_user(request, db)
+    wanted_items = list(
+        db.scalars(
+            select(WantedItem)
+            .where(WantedItem.user_id == user.id, WantedItem.status != WantedStatus.CANCELLED)
+            .order_by(WantedItem.updated_at.desc(), WantedItem.id.desc())
+            .limit(50)
+        )
+    )
+    review_books = _opds_review_books(db) if user.role == Role.ADMIN else []
+    if _wants_opds_json(request):
+        publications = [
+            _opds_json_download_status_publication(db, item)
+            for item in wanted_items
+        ]
+        publications.extend(_opds_json_review_publication(book) for book in review_books)
+        return _opds_json_response(
+            {
+                "metadata": {"title": "Digest Downloads", "numberOfItems": len(publications)},
+                "links": [{"rel": "self", "href": "/opds/downloads", "type": "application/opds+json"}],
+                "publications": publications,
+            }
+        )
+    feed = _opds_feed("Digest Downloads", settings.public_url + "/opds/downloads")
+    for item in wanted_items:
+        _opds_add_download_status_entry(feed, db, item)
+    for book in review_books:
+        _opds_add_review_entry(feed, book)
+    return _opds_response(feed)
+
+
+@app.get("/opds/downloads/review/{book_id}/", include_in_schema=False)
+@app.get("/opds/downloads/review/{book_id}")
+def opds_download_review(
+    book_id: str,
+    request: Request,
+    db: Annotated[Session, Depends(get_db)],
+):
+    _require_opds_admin(request, db)
+    book = db.get(Book, book_id)
+    if book is None:
+        raise HTTPException(404)
+    navigation = [
+        _opds_json_link(
+            "Search matching metadata",
+            f"/opds/downloads/review/{book.id}/search?{urlencode({'title': book.title, 'author': book.primary_author})}",
+        ),
+        _opds_json_link("Approve embedded metadata", f"/opds/downloads/review/{book.id}/embedded"),
+        _opds_json_link("Back to downloads", "/opds/downloads"),
+    ]
+    return _opds_navigation_response(
+        request,
+        f"Review metadata - {book.title}",
+        settings.public_url + f"/opds/downloads/review/{book.id}",
+        navigation,
+    )
+
+
+@app.get("/opds/downloads/review/{book_id}/search/", include_in_schema=False)
+@app.get("/opds/downloads/review/{book_id}/search")
+def opds_download_review_search(
+    book_id: str,
+    request: Request,
+    db: Annotated[Session, Depends(get_db)],
+    title: str = "",
+    author: str = "",
+):
+    _require_opds_admin(request, db)
+    book = db.get(Book, book_id)
+    if book is None:
+        raise HTTPException(404)
+    candidates = find_candidates(
+        db,
+        book,
+        title=title or book.title,
+        author=author or book.primary_author,
+        isbns=[],
+    )
+    navigation = [
+        _opds_json_link(
+            f"{item.get('title') or 'Untitled'} - {', '.join(item.get('authors') or []) or 'Unknown'} ({round(float(item.get('confidence') or 0) * 100)}%)",
+            f"/opds/downloads/review/{book.id}/apply/{index}?{urlencode({'title': title or book.title, 'author': author or book.primary_author})}",
+        )
+        for index, item in enumerate(candidates)
+    ]
+    if not navigation:
+        navigation.append(_opds_json_link("No provider matches found", f"/opds/downloads/review/{book.id}"))
+    navigation.append(_opds_json_link("Back to review", f"/opds/downloads/review/{book.id}"))
+    return _opds_navigation_response(
+        request,
+        f"Metadata matches - {book.title}",
+        settings.public_url + f"/opds/downloads/review/{book.id}/search",
+        navigation,
+    )
+
+
+@app.get("/opds/downloads/review/{book_id}/apply/{index}/", include_in_schema=False)
+@app.get("/opds/downloads/review/{book_id}/apply/{index}")
+def opds_download_review_apply(
+    book_id: str,
+    index: int,
+    request: Request,
+    db: Annotated[Session, Depends(get_db)],
+    title: str = "",
+    author: str = "",
+):
+    _require_opds_admin(request, db)
+    book = db.get(Book, book_id)
+    if book is None:
+        raise HTTPException(404)
+    candidates = find_candidates(
+        db,
+        book,
+        title=title or book.title,
+        author=author or book.primary_author,
+        isbns=[],
+    )
+    if index < 0 or index >= len(candidates):
+        raise HTTPException(404)
+    apply_candidate(db, book, candidates[index], organise=True, replace_existing=True)
+    return _opds_json_action_response("Metadata approved", f"Approved {book.title}")
+
+
+@app.get("/opds/downloads/review/{book_id}/embedded/", include_in_schema=False)
+@app.get("/opds/downloads/review/{book_id}/embedded")
+def opds_download_review_embedded(
+    book_id: str,
+    request: Request,
+    db: Annotated[Session, Depends(get_db)],
+):
+    _require_opds_admin(request, db)
+    book = db.get(Book, book_id)
+    if book is None:
+        raise HTTPException(404)
+    organise_book(db, book)
+    return _opds_json_action_response("Metadata approved", f"Approved embedded metadata for {book.title}")
+
+
+@app.get("/opds/discover/", include_in_schema=False)
+@app.get("/opds/discover")
+def opds_discover(request: Request, db: Annotated[Session, Depends(get_db)]):
+    _require_opds_user(request, db)
+    navigation = [
+        _opds_json_link("Search", "/opds/discover/search"),
+        _opds_json_link("Trending", "/opds/discover/trending"),
+        _opds_json_link("NYT Bestsellers", "/opds/discover/nyt-bestsellers"),
+        _opds_json_link("New Releases", "/opds/discover/new-releases"),
+        _opds_json_link("Downloads", "/opds/downloads"),
+    ]
+    return _opds_navigation_response(
+        request,
+        "Digest Discover",
+        settings.public_url + "/opds/discover",
+        navigation,
+        searchable=True,
+    )
+
+
+@app.get("/opds/discover/for-you/", include_in_schema=False)
+@app.get("/opds/discover/for-you")
+def opds_discover_for_you(request: Request, db: Annotated[Session, Depends(get_db)]):
+    user = _require_opds_user(request, db)
+    return _opds_discovery_response(
+        request,
+        db,
+        "Digest Discover - For you",
+        settings.public_url + "/opds/discover/for-you",
+        build_discovery(db, user.id).recommended,
+    )
+
+
+@app.get("/opds/discover/trending/", include_in_schema=False)
+@app.get("/opds/discover/trending")
+def opds_discover_trending(
+    request: Request,
+    db: Annotated[Session, Depends(get_db)],
+    period: str = "now",
+    genre: str = "",
+):
+    _require_opds_user(request, db)
+    if not genre:
+        return _opds_navigation_response(
+            request,
+            "Digest Discover - Trending",
+            settings.public_url + "/opds/discover/trending",
+            _opds_genre_navigation("/opds/discover/trending"),
+        )
+    user = _require_opds_user(request, db)
+    config = settings_map(db)
+    if config.get("hardcover_api_key"):
+        _, days = HARDCOVER_TRENDING_PERIODS.get(period, HARDCOVER_TRENDING_PERIODS["now"])
+        genre_label = hardcover_genre_query_label(
+            config["hardcover_api_key"], GENRES.get(genre, genre)
+        )
+        items = hardcover_books(config["hardcover_api_key"], days=days, genre=genre_label)
+    else:
+        items = build_discovery(db, user.id).trending
+    return _opds_discovery_response(
+        request,
+        db,
+        "Digest Discover - Trending",
+        settings.public_url + f"/opds/discover/trending/{quote(genre, safe='')}/{quote(period, safe='')}",
+        items,
+    )
+
+
+@app.get("/opds/discover/trending/{genre}/", include_in_schema=False)
+@app.get("/opds/discover/trending/{genre}")
+def opds_discover_trending_periods(
+    request: Request,
+    db: Annotated[Session, Depends(get_db)],
+    genre: str,
+):
+    _require_opds_user(request, db)
+    key = genre if genre in GENRES else "fantasy"
+    return _opds_navigation_response(
+        request,
+        f"Trending - {GENRES[key]}",
+        settings.public_url + f"/opds/discover/trending/{quote(key, safe='')}",
+        _opds_period_navigation(
+            f"/opds/discover/trending/{quote(key, safe='')}",
+            HARDCOVER_TRENDING_PERIODS,
+        ),
+    )
+
+
+@app.get("/opds/discover/trending/{genre}/{period}/", include_in_schema=False)
+@app.get("/opds/discover/trending/{genre}/{period}")
+def opds_discover_trending_books(
+    request: Request,
+    db: Annotated[Session, Depends(get_db)],
+    genre: str,
+    period: str,
+):
+    return opds_discover_trending(request, db, period=period, genre=genre)
+
+
+@app.get("/opds/discover/new-releases/", include_in_schema=False)
+@app.get("/opds/discover/new-releases")
+def opds_discover_new_releases(
+    request: Request,
+    db: Annotated[Session, Depends(get_db)],
+    genre: str = "",
+    period: str = "90d",
+):
+    _require_opds_user(request, db)
+    if not genre:
+        return _opds_navigation_response(
+            request,
+            "Digest Discover - New Releases",
+            settings.public_url + "/opds/discover/new-releases",
+            _opds_genre_navigation("/opds/discover/new-releases"),
+        )
+    user = _require_opds_user(request, db)
+    config = settings_map(db)
+    if config.get("hardcover_api_key"):
+        _, days = OPDS_NEW_RELEASE_PERIODS.get(period, OPDS_NEW_RELEASE_PERIODS["90d"])
+        items = hardcover_books(
+            config["hardcover_api_key"],
+            days=days,
+            genre=hardcover_genre_query_label(
+                config["hardcover_api_key"], GENRES.get(genre, genre)
+            ),
+            new_releases=True,
+        )
+    else:
+        items = build_discovery(db, user.id).new_releases
+    return _opds_discovery_response(
+        request,
+        db,
+        "Digest Discover - New releases",
+        settings.public_url + f"/opds/discover/new-releases/{quote(genre, safe='')}/{quote(period, safe='')}",
+        items,
+    )
+
+
+@app.get("/opds/discover/new-releases/{genre}/", include_in_schema=False)
+@app.get("/opds/discover/new-releases/{genre}")
+def opds_discover_new_release_periods(
+    request: Request,
+    db: Annotated[Session, Depends(get_db)],
+    genre: str,
+):
+    _require_opds_user(request, db)
+    key = genre if genre in GENRES else "fantasy"
+    return _opds_navigation_response(
+        request,
+        f"New Releases - {GENRES[key]}",
+        settings.public_url + f"/opds/discover/new-releases/{quote(key, safe='')}",
+        _opds_period_navigation(
+            f"/opds/discover/new-releases/{quote(key, safe='')}",
+            OPDS_NEW_RELEASE_PERIODS,
+        ),
+    )
+
+
+@app.get("/opds/discover/new-releases/{genre}/{period}/", include_in_schema=False)
+@app.get("/opds/discover/new-releases/{genre}/{period}")
+def opds_discover_new_release_books(
+    request: Request,
+    db: Annotated[Session, Depends(get_db)],
+    genre: str,
+    period: str,
+):
+    return opds_discover_new_releases(request, db, genre=genre, period=period)
+
+
+@app.get("/opds/discover/nyt-bestsellers/", include_in_schema=False)
+@app.get("/opds/discover/nyt-bestsellers")
+def opds_discover_nyt_bestsellers(
+    request: Request,
+    db: Annotated[Session, Depends(get_db)],
+):
+    _require_opds_user(request, db)
+    _, lists = configured_nyt_lists(db)
+    navigation = [
+        _opds_json_link(item["title"], f"/opds/discover/nyt-bestsellers/{quote(item['slug'], safe='')}")
+        for item in lists
+    ]
+    return _opds_navigation_response(
+        request,
+        "Digest Discover - NYT Bestsellers",
+        settings.public_url + "/opds/discover/nyt-bestsellers",
+        navigation,
+    )
+
+
+@app.get("/opds/discover/nyt-bestsellers/{slug}/", include_in_schema=False)
+@app.get("/opds/discover/nyt-bestsellers/{slug}")
+def opds_discover_nyt_bestseller_weeks(
+    request: Request,
+    db: Annotated[Session, Depends(get_db)],
+    slug: str,
+):
+    _require_opds_user(request, db)
+    _, lists = configured_nyt_lists(db)
+    item = next((value for value in lists if value["slug"] == slug), None)
+    if item is None:
+        return _opds_empty_response(
+            request,
+            "Digest Discover - NYT Bestsellers",
+            settings.public_url + f"/opds/discover/nyt-bestsellers/{quote(slug, safe='')}",
+        )
+    navigation = [
+        _opds_json_link(
+            "Current",
+            f"/opds/discover/nyt-bestsellers/{quote(slug, safe='')}/current",
+            count=15,
+        ),
+        *[
+            _opds_json_link(
+                week["title"],
+                f"/opds/discover/nyt-bestsellers/{quote(slug, safe='')}/{quote(week['date'], safe='')}",
+                count=15,
+            )
+            for week in nyt_weeks(item)
+        ],
+    ]
+    return _opds_navigation_response(
+        request,
+        f"NYT Bestsellers - {item['title']}",
+        settings.public_url + f"/opds/discover/nyt-bestsellers/{quote(slug, safe='')}",
+        navigation,
+    )
+
+
+def _cached_nyt_bestsellers(api_key: str, slug: str, date_value: str) -> list[dict]:
+    cache_key = (slug, date_value)
+    now_value = datetime.now(UTC)
+    cached = _nyt_opds_cache.get(cache_key)
+    if cached and cached[0] > now_value:
+        logger.info(
+            "OPDS NYT cache hit slug=%s date=%s items=%d",
+            slug,
+            date_value,
+            len(cached[1]),
+        )
+        return cached[1]
+    items = nyt_bestsellers(api_key, slug, date_value)
+    ttl = NYT_OPDS_CACHE_TTL if items else NYT_OPDS_EMPTY_CACHE_TTL
+    _nyt_opds_cache[cache_key] = (now_value + ttl, items)
+    logger.info(
+        "OPDS NYT cache store slug=%s date=%s items=%d ttl_seconds=%d",
+        slug,
+        date_value,
+        len(items),
+        int(ttl.total_seconds()),
+    )
+    return items
+
+
+@app.get("/opds/discover/nyt-bestsellers/{slug}/{week}/", include_in_schema=False)
+@app.get("/opds/discover/nyt-bestsellers/{slug}/{week}")
+def opds_discover_nyt_bestseller_books(
+    request: Request,
+    db: Annotated[Session, Depends(get_db)],
+    slug: str,
+    week: str,
+):
+    _require_opds_user(request, db)
+    api_key, lists = configured_nyt_lists(db)
+    item = next((value for value in lists if value["slug"] == slug), None)
+    if not api_key or item is None:
+        logger.warning(
+            "OPDS NYT unavailable slug=%s week=%s has_api_key=%s list_found=%s list_count=%d",
+            slug,
+            week,
+            bool(api_key),
+            item is not None,
+            len(lists),
+        )
+        return _opds_empty_response(
+            request,
+            "Digest Discover - NYT Bestsellers",
+            settings.public_url + f"/opds/discover/nyt-bestsellers/{quote(slug, safe='')}/{quote(week, safe='')}",
+    )
+    date_value = week if re.fullmatch(r"\d{4}-\d{2}-\d{2}", week) else "current"
+    try:
+        items = _cached_nyt_bestsellers(api_key, slug, date_value)
+        logger.info(
+            "OPDS NYT fetched slug=%s requested_week=%s effective_week=%s items=%d",
+            slug,
+            week,
+            date_value,
+            len(items),
+        )
+    except (httpx.HTTPError, TypeError, ValueError) as exc:
+        status_code = getattr(getattr(exc, "response", None), "status_code", None)
+        logger.error(
+            "OPDS NYT fetch failed slug=%s requested_week=%s effective_week=%s status=%s error=%s",
+            slug,
+            week,
+            date_value,
+            status_code,
+            type(exc).__name__,
+        )
+        items = []
+    if not items and date_value != "current":
+        logger.info(
+            "OPDS NYT empty for dated week; trying current slug=%s requested_week=%s",
+            slug,
+            week,
+        )
+        try:
+            items = _cached_nyt_bestsellers(api_key, slug, "current")
+            date_value = "current"
+            logger.info(
+                "OPDS NYT current fallback fetched slug=%s items=%d",
+                slug,
+                len(items),
+            )
+        except (httpx.HTTPError, TypeError, ValueError) as exc:
+            status_code = getattr(getattr(exc, "response", None), "status_code", None)
+            logger.error(
+                "OPDS NYT current fallback failed slug=%s status=%s error=%s",
+                slug,
+                status_code,
+                type(exc).__name__,
+            )
+            items = []
+    logger.info(
+        "OPDS NYT rendering slug=%s requested_week=%s rendered_week=%s items=%d",
+        slug,
+        week,
+        date_value,
+        len(items),
+    )
+    return _opds_discovery_response(
+        request,
+        db,
+        f"NYT Bestsellers - {item['title']} - {date_value}",
+        settings.public_url + f"/opds/discover/nyt-bestsellers/{quote(slug, safe='')}/{quote(date_value, safe='')}",
+        items,
+    )
+
+
+@app.get("/opds/discover/genre/{genre}/", include_in_schema=False)
+@app.get("/opds/discover/genre/{genre}")
+@app.get("/opds/discover/genre/", include_in_schema=False)
+@app.get("/opds/discover/genre")
+def opds_discover_genre(
+    request: Request,
+    db: Annotated[Session, Depends(get_db)],
+    genre: str = "fantasy",
+):
+    user = _require_opds_user(request, db)
+    key = genre if genre in GENRES else "fantasy"
+    config = settings_map(db)
+    if config.get("hardcover_api_key"):
+        items = hardcover_books(
+            config["hardcover_api_key"],
+            days=None,
+            genre=hardcover_genre_query_label(config["hardcover_api_key"], GENRES[key]),
+        )
+    else:
+        items = build_discovery(db, user.id, genre=key).genre_items
+    return _opds_discovery_response(
+        request,
+        db,
+        f"Digest Discover - {GENRES[key]}",
+        settings.public_url + f"/opds/discover/genre?genre={key}",
+        items,
+    )
+
+
+@app.get("/opds/discover/search/", include_in_schema=False)
+@app.get("/opds/discover/search")
+def opds_discover_search(
+    request: Request,
+    db: Annotated[Session, Depends(get_db)],
+    q: str = "",
+    query: str = "",
+):
+    user = _require_opds_user(request, db)
+    search_query = (q or query).strip()
+    if not search_query:
+        return _opds_search_status_response(
+            request,
+            db,
+            user,
+            "Digest Discover - Search",
+            settings.public_url + "/opds/discover/search",
+    )
+    config = settings_map(db)
+    try:
+        items = search_discovery_books(
+            search_query,
+            hardcover_api_key=config.get("hardcover_api_key", ""),
+            language=config.get("default_language", "en"),
+        )
+    except (httpx.HTTPError, TypeError, ValueError):
+        items = []
+    try:
+        author_items = author_bibliography(
+            search_query,
+            hardcover_api_key=config.get("hardcover_api_key", ""),
+            language=config.get("default_language", "en"),
+        )
+    except (httpx.HTTPError, TypeError, ValueError):
+        author_items = []
+    return _opds_search_status_response(
+        request,
+        db,
+        user,
+        f"Digest Discover - Search: {search_query}",
+        settings.public_url + f"/opds/discover/search?{urlencode({'query': search_query})}",
+        search_results=_opds_dedupe_discovery_items([*items, *author_items]),
+    )
+
+
+@app.get("/opds/discover/search.xml", include_in_schema=False)
+def opds_discover_search_descriptor(request: Request, db: Annotated[Session, Depends(get_db)]):
+    _require_opds_user(request, db)
+    description = Element(f"{{{OS_NS}}}OpenSearchDescription")
+    SubElement(description, "ShortName").text = "Digest Discover"
+    SubElement(description, "Description").text = "Search Digest Discover by title or author"
+    SubElement(
+        description,
+        "Url",
+        type="application/atom+xml;profile=opds-catalog;kind=acquisition",
+        template=_opds_href("/opds/discover/search?query={searchTerms}"),
+    )
+    SubElement(
+        description,
+        "Url",
+        type="application/opds+json",
+        template=_opds_href("/opds/discover/search?query={searchTerms}"),
+    )
+    return _opensearch_response(description)
+
+
+def _owned_opds_wanted(db: Session, user: User, wanted_id: int) -> WantedItem:
+    item = db.get(WantedItem, wanted_id)
+    if item is None or item.user_id != user.id:
+        raise HTTPException(404)
+    return item
+
+
+@app.get("/opds/discover/status/{wanted_id}", include_in_schema=False)
+def opds_discover_download_status(
+    wanted_id: int,
+    request: Request,
+    db: Annotated[Session, Depends(get_db)],
+):
+    user = _require_opds_user(request, db)
+    return JSONResponse(_opds_wanted_payload(db, _owned_opds_wanted(db, user, wanted_id)))
+
+
+@app.get("/opds/discover/download/{wanted_id}/{release_id}", include_in_schema=False)
+def opds_discover_select_download(
+    wanted_id: int,
+    release_id: int,
+    request: Request,
+    db: Annotated[Session, Depends(get_db)],
+):
+    user = _require_opds_user(request, db)
+    item = _owned_opds_wanted(db, user, wanted_id)
+    release = db.get(AcquisitionRelease, release_id)
+    if release is None or release.wanted_id != item.id:
+        raise HTTPException(404)
+    try:
+        queue_release(db, item, release)
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    return JSONResponse(_opds_wanted_payload(db, item))
+
+
+@app.get("/opds/discover/request/", include_in_schema=False)
+@app.get("/opds/discover/request")
+def opds_discover_request(
+    request: Request,
+    db: Annotated[Session, Depends(get_db)],
+    source: str = "",
+    title: str = "",
+    source_id: str = "",
+    author: str = "",
+    isbn: str = "",
+    cover_url: str = "",
+):
+    user = _require_opds_user(request, db)
+    source = source.strip()
+    title = title.strip()
+    author = author.strip()
+    isbn = isbn.strip()
+    if source not in {"hardcover", "nytimes", "openlibrary"} or not title:
+        raise HTTPException(400, "Invalid discovery book")
+    if find_library_book(db, title=title, author=author, isbn=isbn) is not None:
+        return Response(
+            f"{title} is already in your Digest library.",
+            200,
+            media_type="text/plain; charset=utf-8",
+            headers=_opds_headers(),
+        )
+    item = create_wanted(
+        db,
+        user_id=user.id,
+        source=source,
+        source_id=source_id,
+        title=title,
+        author=author,
+        isbn=isbn,
+        cover_url=cover_url,
+    )
+    if "application/json" in request.headers.get("accept", ""):
+        return JSONResponse(_opds_wanted_payload(db, item), status_code=202)
     return Response(
-        tostring(feed, encoding="utf-8", xml_declaration=True), media_type="application/atom+xml"
+        f"Digest queued {item.title} for download.",
+        202,
+        media_type="text/plain; charset=utf-8",
+        headers=_opds_headers(),
     )

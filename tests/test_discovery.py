@@ -473,8 +473,8 @@ def test_discover_route_renders_ereader_view_and_preserves_section_navigation() 
 
         html = discover(request, db).body.decode()
 
-        assert "Discover" in html and "New Releases" in html
-        assert "navigation=/discover%3Fview%3Dnew" in html
+        assert "Discover" in html
+        assert 'data-view="discover"' in html
 
         detail_request = Request(
             {
@@ -702,4 +702,5 @@ def test_bookstack_nyt_active_list_and_week_history_rules(monkeypatch) -> None:
         )
         monkeypatch.setattr("digest.main.nyt_weekly_lists", lambda api_key: lists)
         result = api_bestseller_weeks(request, db, slug="active")
-        assert result["title"] == "Active" and len(result["weeks"]) == 26
+        assert result["title"] == "Active" and len(result["weeks"]) == 27
+        assert result["weeks"][0] == {"date": "current", "title": "Current"}

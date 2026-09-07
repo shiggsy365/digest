@@ -20,7 +20,8 @@ COPY alembic.ini ./
 
 RUN pip install --no-cache-dir . \
     && mkdir -p /data /library \
-    && chown -R digest:digest /app /data /library
+    && chown -R digest:digest /app /data /library \
+    && chmod -R a+rX /app
 
 USER digest
 
