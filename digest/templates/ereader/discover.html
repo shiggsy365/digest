@@ -18,7 +18,7 @@
 {% if panel == 'new-releases' and (new_releases_uses_provider or (not new_releases and not provider_error)) %}<form method="get"><input type="hidden" name="mode" value="hardcover-new-releases"><input type="hidden" name="panel" value="new-releases"><label>Genre<select name="genre"><option value="">All genres</option>{% for value in hardcover_genres %}<option value="{{ value }}">{{ value }}</option>{% endfor %}</select></label><button>Load</button></form>{% endif %}
 {% if panel == 'genre' %}<p>{% for slug, label in genres.items() %}<a href="/discover?genre={{ slug }}&panel=genre">{% if slug == selected_genre %}<strong>{{ label }}</strong>{% else %}{{ label }}{% endif %}</a>{% if not loop.last %} · {% endif %}{% endfor %}</p>{% endif %}
 {% endblock %}
-{% block content %}
+{% block content %}<div data-view="discover">
 {% if provider_error and panel in ['search', 'trending', 'new-releases', 'bestsellers'] %}<p class="error">{{ provider_error }}</p>{% endif %}
 
 {% if panel == 'search' %}
@@ -49,4 +49,4 @@
 {% if new_releases %}<section><h2>New Releases</h2><div class="book-list">{% for book in new_releases %}{{ book_item(book, 'new') }}{% endfor %}</div></section>{% endif %}
 {% if not recommended and not continue_series and not popular and not new_releases %}<p>Rate books, mark favourites, and update reading status to improve your suggestions.</p>{% endif %}
 {% endif %}
-{% endblock %}
+</div>{% endblock %}

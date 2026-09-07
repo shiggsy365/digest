@@ -1,5 +1,5 @@
 x-digest-app: &digest-app
-  image: ghcr.io/shiggsy365/digest:${DIGEST_VERSION:-1.0.38}
+  image: ghcr.io/shiggsy365/digest:${DIGEST_VERSION:-1.0.39}
   user: "${PUID:-1000}:${PGID:-1000}"
   environment: &digest-environment
     DIGEST_SECRET_KEY: ${DIGEST_SECRET_KEY:?Set DIGEST_SECRET_KEY in .env}
